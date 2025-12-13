@@ -19,8 +19,8 @@ import Unauthorized from '../../common/Unauthorized';
 
 // --- Configuration ---
 const API_URL = import.meta.env.VITE_API_URL;
-// Note: In production, move this key to .env (VITE_STRIPE_PK)
-const stripePromise = loadStripe("pk_test_51ScuLQQnPAqwFEiOemY3Jj3RZVSMm1qqpCDdBfMvHVfcHXTbNEnitkd8hpARcRby7U9WUqRnVE4ybpXyulWMkIMK00n5cxcbJd");
+
+const stripePromise = loadStripe(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY);
 
 /**
  * CheckoutForm Component
