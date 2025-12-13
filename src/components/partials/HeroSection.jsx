@@ -30,7 +30,6 @@ const HeroSection = () => {
   return (
     <section className="relative w-full h-screen min-h-[600px] flex items-center justify-center overflow-hidden">
       
-      {/* 4. BACKGROUND IMAGE + GRADIENT OVERLAY  */}
       <div className="absolute inset-0 w-full h-full z-0">
         {/* High-quality education related image */}
         <img 
@@ -88,7 +87,7 @@ const HeroSection = () => {
           >
             {/* Button 1: Post a Tuition */}
             <a 
-              href={isLoggedIn ? "/dashboard/post-tuition" : "/login"}
+              href={isLoggedIn ? "/student-dashboard/post-tuition" : "/login"}
               className="w-full sm:w-auto px-8 py-4 bg-emerald-600 hover:bg-emerald-700 text-white text-lg font-bold rounded-full transition-all transform hover:scale-105 shadow-lg shadow-emerald-900/50 flex items-center justify-center gap-2"
             >
               Post a Tuition
@@ -97,7 +96,7 @@ const HeroSection = () => {
 
             {/* Button 2: Browse Tutors */}
             <a 
-              href="/tutors"
+              href="/all-tutors"
               className="w-full sm:w-auto px-8 py-4 bg-transparent border-2 border-gray-300 hover:border-white text-white hover:bg-white hover:text-gray-900 text-lg font-bold rounded-full transition-all flex items-center justify-center gap-2"
             >
               <Search size={20} />

@@ -160,25 +160,25 @@ const About = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
           {/* Team Member 1 */}
           <TeamCard 
-            img="https://images.unsplash.com/photo-1560250097-0b93528c311a?ixlib=rb-1.2.1&auto=format&fit=crop&w=400&q=80"
+            img="https://i.ibb.co.com/fYrBgW2B/S-M-Samiul-hasan.jpg"
             name="S M Samiul Hasan"
             role="Founder & CEO"
           />
           {/* Team Member 2 */}
           <TeamCard 
-            img="https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?ixlib=rb-1.2.1&auto=format&fit=crop&w=400&q=80"
+            img="https://i.ibb.co.com/twtrH4X3/employee.png"
             name="Sarah Ahmed"
             role="Head of Operations"
           />
           {/* Team Member 3 */}
           <TeamCard 
-            img="https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?ixlib=rb-1.2.1&auto=format&fit=crop&w=400&q=80"
+            img="https://i.ibb.co.com/twtrH4X3/employee.png"
             name="Rahim Uddin"
             role="Senior Developer"
           />
            {/* Team Member 4 */}
            <TeamCard 
-            img="https://images.unsplash.com/photo-1580489944761-15a19d654956?ixlib=rb-1.2.1&auto=format&fit=crop&w=400&q=80"
+            img="https://i.ibb.co.com/twtrH4X3/employee.png"
             name="Nusrat Jahan"
             role="HR Manager"
           />

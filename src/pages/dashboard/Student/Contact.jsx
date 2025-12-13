@@ -85,7 +85,7 @@ const Contact = () => {
                   <MapPin size={24} />
                 </div>
                 <h3 className="font-semibold text-gray-800 text-lg">Our Office</h3>
-                <p className="text-gray-500 text-sm mt-2">Dhaka, Bangladesh</p>
+                <p className="text-gray-500 text-sm mt-2">Rangpur, Bangladesh</p>
               </div>
 
               {/* Phone */}
@@ -94,7 +94,7 @@ const Contact = () => {
                   <Phone size={24} />
                 </div>
                 <h3 className="font-semibold text-gray-800 text-lg">Phone</h3>
-                <p className="text-gray-500 text-sm mt-2">+880 17xx-xxxxxx</p>
+                <p className="text-gray-500 text-sm mt-2">+880 1866969660</p>
               </div>
 
               {/* Email */}

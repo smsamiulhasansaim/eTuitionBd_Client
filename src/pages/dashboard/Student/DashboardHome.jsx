@@ -286,7 +286,7 @@ const StudentDashboardHome = () => {
           <h3 className="text-lg font-bold text-gray-800 mb-4">Quick Actions</h3>
           <div className="space-y-3 flex-1">
             <button 
-              onClick={() => navigate('/dashboard/post-tuition')}
+              onClick={() => navigate('/student-dashboard/post-tuition')}
               className="w-full flex items-center gap-3 p-3 md:p-4 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl transition-colors group"
             >
               <div className="bg-white p-2 rounded-lg shadow-sm group-hover:scale-110 transition-transform">
@@ -296,7 +296,7 @@ const StudentDashboardHome = () => {
             </button>
 
             <button 
-              onClick={() => navigate('/dashboard/applied-tutors')}
+              onClick={() => navigate('/student-dashboard/applied-tutors')}
               className="w-full flex items-center gap-3 p-3 md:p-4 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-xl transition-colors group"
             >
                <div className="bg-white p-2 rounded-lg shadow-sm group-hover:scale-110 transition-transform">
@@ -311,7 +311,7 @@ const StudentDashboardHome = () => {
             </button>
 
             <button 
-              onClick={() => navigate('/dashboard/payment-history')}
+              onClick={() => navigate('/student-dashboard/payment-history')}
               className="w-full flex items-center gap-3 p-3 md:p-4 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-xl transition-colors group"
             >
                <div className="bg-white p-2 rounded-lg shadow-sm group-hover:scale-110 transition-transform">
@@ -321,7 +321,7 @@ const StudentDashboardHome = () => {
             </button>
 
              <button 
-               onClick={() => navigate('/dashboard/my-tuitions')}
+               onClick={() => navigate('/student-dashboard/ongoing-tuitions')}
                className="w-full flex items-center gap-3 p-3 md:p-4 bg-orange-50 hover:bg-orange-100 text-orange-700 rounded-xl transition-colors group"
             >
                <div className="bg-white p-2 rounded-lg shadow-sm group-hover:scale-110 transition-transform">

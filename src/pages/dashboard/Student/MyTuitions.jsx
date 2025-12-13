@@ -262,7 +262,7 @@ const MyTuitions = () => {
                 : `No tuition posts found with status "${filter}".`}
             </p>
             {filter === 'All' && (
-              <Link to="/post-tuition" className="mt-8 px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all">
+              <Link to="/student-dashboard/post-tuition" className="mt-8 px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all">
                 Post Your First Tuition
               </Link>
             )}
