@@ -33,44 +33,38 @@ const CheckoutForm = ({ selectedTutor, closePaymentModal }) => {
   const [error, setError] = useState(null);
   const [processing, setProcessing] = useState(false);
 
-  // --- Mutation for Payment & Booking ---
-  const bookingMutation = useMutation({
-    mutationFn: async ({ paymentIntentId }) => {
-      const user = JSON.parse(localStorage.getItem("user"));
-      
-      // Ensure IDs are strings
-      const rawTutorId = selectedTutor.tutorId || selectedTutor._id;
-      const finalTutorId = typeof rawTutorId === 'object' ? rawTutorId._id : rawTutorId;
-      
-      const rawTuitionId = selectedTutor.tuitionId;
-      const finalTuitionId = typeof rawTuitionId === 'object' ? rawTuitionId._id : rawTuitionId;
+// --- Mutation for Payment & Booking ---
+const bookingMutation = useMutation({
+  mutationFn: async ({ paymentIntentId }) => {
+    const user = JSON.parse(localStorage.getItem("user"));
+    
+    const rawTutorId = selectedTutor.tutorId || selectedTutor._id;
+    const finalTutorId = typeof rawTutorId === 'object' ? rawTutorId._id : rawTutorId;
+    
+    const rawTuitionId = selectedTutor.tuitionId;
+    const finalTuitionId = typeof rawTuitionId === 'object' ? rawTuitionId._id : rawTuitionId;
 
-      // Extract tuition data (pre-fetched in parent)
-      const tData = selectedTutor.tuitionData || {};
+    const tData = selectedTutor.tuitionData || {};
 
-      const bookingPayload = {
-        applicationId: selectedTutor._id,
-        studentEmail: user.email,
-        tutorId: finalTutorId,
-        tutorName: selectedTutor.tutorName,
-        tuitionId: finalTuitionId,
-        tuitionTitle: selectedTutor.tuitionTitle || tData.subject || "Tuition",
-        subject: tData.subject || "N/A",
-        class: tData.class || "N/A",
-        location: tData.location || "N/A",
-        daysPerWeek: tData.days || tData.daysPerWeek || "N/A",
-        amount: parseInt(selectedTutor.expectedSalary) || 0,
-        transactionId: paymentIntentId
-      };
+    const bookingPayload = {
+      applicationId: selectedTutor._id,
+      studentEmail: user.email,
+      tutorId: finalTutorId,
+      tutorName: selectedTutor.tutorName,
+      tuitionId: finalTuitionId,
+      tuitionTitle: selectedTutor.tuitionTitle || tData.subject || "Tuition",
+      subject: tData.subject || "N/A",
+      class: tData.class || "N/A",
+      location: tData.location || "N/A",
+      daysPerWeek: tData.days || tData.daysPerWeek || "N/A",
+      amount: parseInt(selectedTutor.expectedSalary) || 0,
+      transactionId: paymentIntentId
+    };
 
-      // 1. Save Booking
-      await axios.post(`${API_URL}/api/payment/save-booking`, bookingPayload);
-      
-      // 2. Update Application Status
-      await axios.patch(`${API_URL}/api/applications/hire-success/${selectedTutor._id}`);
-      
-      return true;
-    },
+    await axios.post(`${API_URL}/api/payment/save-booking`, bookingPayload);
+
+    return true;
+  },
     onSuccess: () => {
       setProcessing(false);
       queryClient.invalidateQueries(['shortlistedTutors']); // Refresh list
