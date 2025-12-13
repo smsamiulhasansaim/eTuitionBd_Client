@@ -44,7 +44,7 @@ const Register = () => {
   // --- 1. Prevent Access if Logged In ---
   useEffect(() => {
     const user = localStorage.getItem('user');
-    if (user) window.location.href = '/dashboard';
+    if (user) window.location.href = '/';
   }, []);
 
   // --- 2. Success Handler (Centralized) ---
@@ -67,7 +67,7 @@ const Register = () => {
       showConfirmButton: false
     }).then(() => {
       // Redirect based on role
-      window.location.href = data.role === 'admin' ? '/dashboard/admin' : '/dashboard';
+      window.location.href = data.role === 'admin' ? '/' : '/';
     });
   };
 

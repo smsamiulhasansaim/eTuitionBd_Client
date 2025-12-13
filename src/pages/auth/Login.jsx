@@ -34,7 +34,7 @@ const Login = () => {
   useEffect(() => {
     const user = localStorage.getItem('user');
     if (user) {
-      window.location.href = '/dashboard';
+      window.location.href = '/';
     }
   }, []);
 
@@ -60,11 +60,11 @@ const Login = () => {
     }).then(() => {
       // 4. Redirect based on Role
       if (userData.role === 'admin') {
-        window.location.href = '/dashboard/admin';
+        window.location.href = '/';
       } else if (userData.role === 'tutor') {
-        window.location.href = '/tutor-dashboard'; // Assuming separate route
+        window.location.href = '/';
       } else {
-        window.location.href = '/student-dashboard';
+        window.location.href = '/';
       }
     });
   };
@@ -126,7 +126,7 @@ const Login = () => {
         name: userName || "Google User",
         email: userEmail,
         googleId: user.uid,
-        role: "student" // Default role, backend can override if user exists
+        role: "student"
       });
 
     } catch (err) {
