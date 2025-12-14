@@ -1,21 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
+import Swal from 'sweetalert2';
 import {
-  MdDashboard,
-  MdPeople,
-  MdBook,
-  MdAssignment,
-  MdSettings,
-  MdAccountCircle,
-  MdMenu,
-  MdClose,
-  MdNotifications,
-  MdLogout,
-  MdChevronRight,
-  MdBarChart,
-  MdReceipt
+  MdDashboard, MdPeople, MdBook, MdAssignment, MdSettings,
+  MdAccountCircle, MdMenu, MdClose, MdNotifications, MdLogout,
+  MdChevronRight, MdBarChart, MdReceipt
 } from 'react-icons/md';
 
 // API Configuration
@@ -32,26 +23,72 @@ const AdminDashboardLayout = () => {
   const profileRef = useRef(null);
   const notifRef = useRef(null);
 
-  // --- 1. Fetch Logged-in Admin Data ---
-  const fetchAdminProfile = async () => {
-    const storedUser = JSON.parse(localStorage.getItem("user"));
-    if (!storedUser?.email) return null;
+  // --- 1. User Authentication Check & Robust Token Retrieval ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) {
+      return { user: null, authConfig: {}, isUserValid: false };
+    }
+    
+    const userData = JSON.parse(userStr);
+    // JWT/Token retrieval logic:
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
 
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config, 
+        isUserValid: !!userData.email && !!authToken
+    };
+  }, []);
+
+  // --- Redirect if not logged in ---
+  if (!user || !isUserValid) {
+    navigate('/login');
+    return null;
+  }
+  
+  // --- 2. Fetch Logged-in Admin Data (SECURED with JWT) ---
+  const fetchAdminProfile = async (config) => {
     try {
-      const res = await axios.get(`${API_URL}/api/users/profile?email=${storedUser.email}`);
+      const res = await axios.get(
+        `${API_URL}/api/users/profile?email=${user.email}`, 
+        config 
+      );
       return res.data.data;
     } catch (error) {
-      console.error("Failed to fetch admin profile", error);
-      return storedUser; // Fallback to local storage data
+      throw error; 
     }
   };
 
-  const { data: adminData } = useQuery({
-    queryKey: ['adminProfile'], // Matches key in AdminProfile.jsx for sync
-    queryFn: fetchAdminProfile,
-    staleTime: 1000 * 60 * 5, // Cache for 5 mins
+  const { data: adminData, isError, error } = useQuery({
+    queryKey: ['adminProfile'],
+    queryFn: () => fetchAdminProfile(authConfig),
+    enabled: isUserValid, // Only fetch if we have a valid token
+    staleTime: 1000 * 60 * 5, 
     retry: false
   });
+
+  // --- 3. Handle Unauthorized Access & Errors ---
+  if (isError) {
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      // Critical auth failure on the main layout data fetch
+      localStorage.removeItem('user');
+      localStorage.removeItem('token');
+      localStorage.removeItem('adminToken');
+      Swal.fire({ icon: 'error', title: 'Session Expired', text: 'Please log in again.' }).then(() => {
+        navigate('/login');
+      });
+      return null;
+    }
+  }
+
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -67,7 +104,7 @@ const AdminDashboardLayout = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const adminMenuItems = [
+  const adminMenuItems = useMemo(() => [
     {
       path: '/admin/dashboard',
       name: 'Dashboard',
@@ -104,7 +141,7 @@ const AdminDashboardLayout = () => {
       name: 'Settings',
       icon: <MdSettings size={22} />,
     },
-  ];
+  ], []);
 
   // Dummy Notifications (Replace with API if needed)
   const notifications = [
@@ -116,11 +153,32 @@ const AdminDashboardLayout = () => {
   const unreadNotifications = notifications.filter(n => !n.read).length;
 
   const handleLogout = () => {
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
-    localStorage.removeItem('adminToken'); // Legacy cleanup
-    localStorage.removeItem('adminData');  // Legacy cleanup
-    navigate('/login');
+    Swal.fire({
+        title: 'Sign Out?',
+        text: "Are you sure you want to sign out?",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#4F46E5',
+        cancelButtonColor: '#DC2626',
+        confirmButtonText: 'Yes, Sign Out'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            localStorage.removeItem('user');
+            localStorage.removeItem('token');
+            localStorage.removeItem('adminToken');
+            
+            Swal.fire({
+              icon: 'success',
+              title: 'Logged Out',
+              toast: true,
+              position: 'top-end',
+              showConfirmButton: false,
+              timer: 1500
+            }).then(() => {
+                navigate('/login'); 
+            });
+        }
+    });
   };
 
   return (

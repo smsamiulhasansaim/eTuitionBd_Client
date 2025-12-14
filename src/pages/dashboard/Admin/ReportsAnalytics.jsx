@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
 import { 
@@ -12,6 +12,7 @@ import {
 // Import Custom Components
 import Loading from '../../../components/common/Loading';
 import ServerDown from '../../common/ServerDown';
+import Unauthorized from '../../common/Unauthorized'; 
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
@@ -23,18 +24,43 @@ const ReportsAnalytics = () => {
 
   const COLORS = ['#4F46E5', '#8B5CF6', '#EC4899', '#10B981', '#F59E0B'];
 
-  // --- 1. Fetch Data (Query) ---
+  // --- 1. JWT Retrieval and Auth Config ---
+  const { authConfig, isUserValid } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) return { authConfig: {}, isUserValid: false };
+    
+    const userData = JSON.parse(userStr);
+    
+    const authToken = userData.token || userData.jwtToken || 
+                      localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+    
+    return { 
+        authConfig: config, 
+        isUserValid: !!authToken && userData?.role === 'admin' 
+    };
+  }, []);
+
+  // --- 2. Fetch Data (Query - SECURED) ---
   const fetchReports = async () => {
-    // Get token if needed (Optional: add Authorization header here)
-    const res = await axios.get(`${API_URL}/api/admin/analytics`);
+    if (!isUserValid) throw new Error("Unauthorized");
+    
+    const res = await axios.get(`${API_URL}/api/admin/analytics`, authConfig);
     return res.data.data;
   };
 
   const { data: reportData, isLoading, isError, error } = useQuery({
     queryKey: ['reportsAnalytics'],
     queryFn: fetchReports,
+    enabled: isUserValid, 
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 5, // Cache data for 5 minutes
+    staleTime: 1000 * 60 * 5, 
+    retry: 1
   });
 
   // Safe Destructuring with Defaults to prevent crashes
@@ -45,16 +71,25 @@ const ReportsAnalytics = () => {
     transactions = [] 
   } = reportData || {};
 
-  // --- 2. Filter Logic ---
-  const filteredTransactions = transactions.filter(t => {
-    if (!startDate && !endDate) return true;
-    const txnDate = new Date(t.date);
-    const start = startDate ? new Date(startDate) : new Date('2000-01-01');
-    const end = endDate ? new Date(endDate) : new Date('2099-12-31');
-    return txnDate >= start && txnDate <= end;
-  });
+  // --- 3. Filter Logic ---
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter(t => {
+      if (!startDate && !endDate) return true;
+      
+      const txnDate = new Date(t.date);
+      const start = startDate ? new Date(startDate) : new Date('2000-01-01');
+      const end = endDate ? new Date(endDate) : new Date('2099-12-31');
+      
+      // Reset time to start/end of day for accurate comparison
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999); 
+      
+      return txnDate >= start && txnDate <= end;
+    });
+  }, [transactions, startDate, endDate]);
 
-  // --- 3. CSV Download Function ---
+
+  // --- 4. CSV Download Function ---
   const downloadCSV = () => {
     if (filteredTransactions.length === 0) {
       alert("No data to export!");
@@ -78,13 +113,15 @@ const ReportsAnalytics = () => {
   // --- Render States ---
   if (isLoading) return <Loading />;
   
-  if (isError) {
-    console.error("Analytics Error:", error);
+  if (isError || !isUserValid) {
+    if (!isUserValid || error?.response?.status === 401 || error?.response?.status === 403 || error?.message === "Unauthorized") {
+      return <Unauthorized />;
+    }
     return <ServerDown />;
   }
 
   return (
-    <div className="space-y-6 animate-fade-in-up">
+    <div className="space-y-6 animate-fade-in-up p-4 md:p-8">
       
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -106,8 +143,7 @@ const ReportsAnalytics = () => {
         {/* Chart 1: Monthly Revenue */}
         <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm min-w-0">
           <h3 className="text-lg font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <MdAttachMoney className="text-indigo-500" /> Monthly Revenue
-          </h3>
+            <MdAttachMoney className="text-indigo-500" /> Monthly Revenue           </h3>
           <div className="h-72 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={earningsData.length > 0 ? earningsData : [{name: 'No Data', amount: 0}]}>
@@ -126,7 +162,7 @@ const ReportsAnalytics = () => {
 
         {/* Chart 2: Top Classes (Pie) */}
         <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm min-w-0">
-          <h3 className="text-lg font-bold text-gray-800 mb-2">Popular Subjects</h3>
+          <h3 className="text-lg font-bold text-gray-800 mb-2">Popular Subjects </h3>
           <div className="h-64 w-full relative">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -158,28 +194,46 @@ const ReportsAnalytics = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
          {/* Top Tutors List */}
-         <div className="lg:col-span-1 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+          <div className="lg:col-span-1 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
             <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
               <MdPerson className="text-purple-500" /> Top Performers
             </h3>
             <div className="space-y-4">
               {topTutors.length > 0 ? (
-                topTutors.map((tutor, index) => (
-                  <div key={tutor.id || index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl hover:bg-indigo-50 transition-colors">
-                    <span className="font-bold text-gray-300 text-lg">0{index + 1}</span>
-                    <img src={tutor.img} alt={tutor.name} className="w-10 h-10 rounded-full object-cover" />
-                    <div className="flex-1">
-                      <p className="text-sm font-bold text-gray-800">{tutor.name}</p>
-                      <p className="text-xs text-gray-500">{tutor.students} Active Students</p>
+                topTutors.map((tutor, index) => {
+                  const isFakeOrEmpty = !tutor.img || tutor.img.includes('pravatar.cc');
+                  
+                  const avatarSrc = isFakeOrEmpty
+                    ? `https://ui-avatars.com/api/?name=${encodeURIComponent(tutor.name)}&background=random&color=fff`
+                    : tutor.img;
+
+                  return (
+                    <div key={tutor.id || index} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl hover:bg-indigo-50 transition-colors">
+                      <span className="font-bold text-gray-300 text-lg">0{index + 1}</span>
+                      
+                      <img 
+                        src={avatarSrc} 
+                        alt={tutor.name} 
+                        className="w-10 h-10 rounded-full object-cover shadow-sm border border-gray-200"
+                        onError={(e) => {
+                          e.target.onerror = null;
+                          e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(tutor.name)}&background=random&color=fff`;
+                        }}
+                      />
+
+                      <div className="flex-1">
+                        <p className="text-sm font-bold text-gray-800">{tutor.name}</p>
+                        <p className="text-xs text-gray-500">{tutor.students} Active Students</p>
+                      </div>
+                      <span className="text-sm font-bold text-indigo-600">{tutor.earnings}</span>
                     </div>
-                    <span className="text-sm font-bold text-indigo-600">{tutor.earnings}</span>
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <p className="text-gray-400 text-sm">No data available</p>
               )}
             </div>
-         </div>
+          </div>
 
          {/* --- TRANSACTIONS TABLE SECTION --- */}
          <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">

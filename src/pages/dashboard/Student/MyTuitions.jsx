@@ -6,7 +6,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { 
   MapPin, DollarSign, Calendar, Users, 
-  Trash2, Search, Briefcase, Filter, Plus 
+  Trash2, Search, Briefcase, Plus 
 } from 'lucide-react';
 
 // --- Custom Components ---
@@ -22,17 +22,23 @@ const MyTuitions = () => {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState('All');
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  // --- Auth & Token Setup ---
+  const { user, token } = useMemo(() => {
     const storedUser = localStorage.getItem('user');
-    if (!storedUser) {
+    const tkn = localStorage.getItem('token');
+    
+    if (!storedUser || !tkn) {
       navigate('/login');
-      return null;
+      return { user: null, token: null };
     }
-    return JSON.parse(storedUser);
+    return { user: JSON.parse(storedUser), token: tkn };
   }, [navigate]);
 
-  // --- 2. Data Fetching (TanStack Query) ---
+  const authConfig = useMemo(() => ({
+    headers: { Authorization: `Bearer ${token}` }
+  }), [token]);
+
+  // --- Data Fetching (TanStack Query) ---
   const { 
     data: tuitions = [], 
     isLoading, 
@@ -41,20 +47,20 @@ const MyTuitions = () => {
   } = useQuery({
     queryKey: ['myTuitions', user?.email],
     queryFn: async () => {
-      if (!user?.email) return [];
-      const response = await axios.get(`${API_URL}/api/tuitions/my-tuitions?email=${user.email}`);
+      if (!user?.email || !token) return [];
+      const response = await axios.get(`${API_URL}/api/tuitions/my-tuitions`, authConfig);
       return response.data.data; 
     },
-    enabled: !!user?.email, // Only fetch if user exists
+    enabled: !!user?.email && !!token,
+    retry: 1,
   });
 
-  // --- 3. Delete Mutation ---
+  // --- Delete Mutation ---
   const deleteMutation = useMutation({
     mutationFn: async (id) => {
-      await axios.delete(`${API_URL}/api/tuitions/delete/${id}`);
+      await axios.delete(`${API_URL}/api/tuitions/delete/${id}`, authConfig);
     },
     onSuccess: () => {
-      // Refresh the list immediately
       queryClient.invalidateQueries(['myTuitions']);
       Swal.fire({
         icon: 'success',
@@ -64,13 +70,12 @@ const MyTuitions = () => {
         showConfirmButton: false
       });
     },
-    onError: (err) => {
+    onError: () => {
       Swal.fire('Error', 'Failed to delete the post.', 'error');
-      console.error(err);
     }
   });
 
-  // --- 4. Handle Delete Action ---
+  // --- Handle Delete Action ---
   const handleDeleteClick = (id) => {
     Swal.fire({
       title: 'Are you sure?',
@@ -87,7 +92,7 @@ const MyTuitions = () => {
     });
   };
 
-  // --- 5. Optimized Filter Logic ---
+  // --- Optimized Filter Logic ---
   const filteredTuitions = useMemo(() => {
     if (filter === 'All') return tuitions;
     return tuitions.filter(item => item.status === filter);
@@ -103,8 +108,10 @@ const MyTuitions = () => {
     }
   };
 
-  // --- 6. Conditional Rendering ---
+  // --- Conditional Rendering ---
   
+  if (!user || !token) return <Unauthorized />; 
+
   if (isLoading) return <Loading />;
 
   if (isError) {
@@ -212,7 +219,8 @@ const MyTuitions = () => {
                 <div className="p-4 bg-gray-50/50 border-t border-gray-100">
                   {item.status === 'approved' ? (
                     <Link 
-                      to={`/dashboard/applied-tutors`}
+                      // FIX: Assuming the path for applied tutors in the student dashboard is /student-dashboard/applied-tutors
+                      to={`/student-dashboard/applied-tutors`}
                       className="flex items-center justify-center gap-2 w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-100 text-sm"
                     >
                       <Users size={18} /> View Applicants
@@ -262,7 +270,7 @@ const MyTuitions = () => {
                 : `No tuition posts found with status "${filter}".`}
             </p>
             {filter === 'All' && (
-              <Link to="/student-dashboard/post-tuition" className="mt-8 px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all">
+              <Link to="/post-tuition" className="mt-8 px-8 py-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all">
                 Post Your First Tuition
               </Link>
             )}

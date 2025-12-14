@@ -14,7 +14,6 @@ const API_URL = import.meta.env.VITE_API_URL;
 
 /**
  * Sidebar Component
- * Extracted to optimize performance and readability.
  */
 const Sidebar = ({ menuItems, currentPath, onClose, onLogout }) => (
   <div className="h-full flex flex-col bg-white border-r border-gray-200">
@@ -73,27 +72,65 @@ const StudentDashboardLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  // --- 1. User Authentication Check & Setup ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
     const userStr = localStorage.getItem("user");
-    return userStr ? JSON.parse(userStr) : null;
+    if (!userStr) {
+      return { user: null, authConfig: {}, isUserValid: false };
+    }
+    
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem("jwtToken"); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config, 
+        isUserValid: !!userData.email && !!authToken
+    };
   }, []);
 
   // --- 2. Fetch Notifications/Stats (TanStack Query) ---
-  // Retrieves the count of shortlisted tutors for the badge
-  const { data: appStats } = useQuery({
+  const { data: appStats, isError: isAppStatsError, error: appStatsError } = useQuery({
     queryKey: ['studentAppStats', user?.email],
     queryFn: async () => {
-      if (!user?.email) return { shortlistedCount: 0 };
-      const response = await axios.get(`${API_URL}/api/applications/student-view?email=${user.email}`);
+      if (!isUserValid) return { shortlistedCount: 0 };
+      
+      const response = await axios.get(`${API_URL}/api/applications/student-view?email=${user.email}`, authConfig);
+      
       const shortlisted = response.data.data.filter(app => app.status === 'Shortlisted').length;
       return { shortlistedCount: shortlisted };
     },
-    enabled: !!user?.email,
-    staleTime: 60000, // Refresh every minute
+    enabled: isUserValid,
+    staleTime: 60000, 
+    retry: 1
   });
 
-  // --- 3. Menu Configuration ---
+  // --- 3. Handle Unauthorized Access & Errors ---
+  if (!user) {
+    navigate('/login');
+    return null;
+  }
+  
+  if (isAppStatsError) {
+    const status = appStatsError.response?.status;
+    if (status === 401 || status === 403) {
+      localStorage.removeItem('user');
+      localStorage.removeItem('token');
+      Swal.fire({ icon: 'error', title: 'Session Expired', text: 'Please log in again.' }).then(() => {
+        navigate('/login');
+      });
+      return null;
+    }
+  }
+
+
+  // --- 4. Menu Configuration ---
   const menuItems = useMemo(() => [
     { path: '/student-dashboard', name: 'Dashboard Home', icon: LayoutDashboard },
     { path: '/student-dashboard/my-tuitions', name: 'My Tuitions', icon: List },
@@ -102,14 +139,14 @@ const StudentDashboardLayout = () => {
       path: '/student-dashboard/applied-tutors', 
       name: 'Applied Tutors', 
       icon: Users, 
-      badge: appStats?.shortlistedCount || 0 // Dynamic Badge
+      badge: appStats?.shortlistedCount || 0 
     },
     { path: '/student-dashboard/ongoing-tuitions', name: 'Ongoing Tuitions', icon: BookOpen },
     { path: '/student-dashboard/payment-history', name: 'Payment History', icon: CreditCard },
     { path: '/student-dashboard/settings', name: 'Profile Settings', icon: Settings },
   ], [appStats]);
 
-  // --- 4. Handlers ---
+  // --- 5. Handlers ---
   const handleLogout = () => {
     Swal.fire({
       title: 'Logout?',

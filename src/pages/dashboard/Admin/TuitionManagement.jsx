@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
@@ -32,35 +32,59 @@ const TuitionManagement = () => {
   const [rejectModal, setRejectModal] = useState({ open: false, id: null });
   const [rejectReason, setRejectReason] = useState("");
 
-  // --- 1. Fetch Tuitions (Query) ---
-  const fetchTuitions = async () => {
-    // Optional: Add Auth Token Logic if needed
-    const storedUser = JSON.parse(localStorage.getItem("user"));
-    if (!storedUser?.email) throw new Error("Unauthorized");
+  // --- 1. JWT Retrieval and Auth Config ---
+  const { authConfig, isUserValid } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) return { authConfig: {}, isUserValid: false };
+    
+    const userData = JSON.parse(userStr);
+    
+    const authToken = userData.token || userData.jwtToken || 
+                      localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
 
-    const res = await axios.get(`${API_URL}/api/tuitions/admin/all`);
-    // Ensure we return an array
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+    
+    return { 
+        authConfig: config, 
+        isUserValid: !!authToken && userData?.role === 'admin' 
+    };
+  }, []);
+
+  // --- 2. Fetch Tuitions (Query - SECURED) ---
+  const fetchTuitions = async () => {
+    if (!isUserValid) throw new Error("Unauthorized");
+    
+    const res = await axios.get(`${API_URL}/api/tuitions/admin/all`, authConfig);
     return Array.isArray(res.data.data) ? res.data.data : [];
   };
 
   const { data: tuitions = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['tuitions'],
     queryFn: fetchTuitions,
+    enabled: isUserValid, 
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2, // Cache for 2 mins
+    staleTime: 1000 * 60 * 2, 
+    retry: 1
   });
 
-  // --- 2. Update Status (Mutation) ---
+  // --- 3. Update Status (Mutation - SECURED) ---
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, newStatus, reason }) => {
-      return await axios.patch(`${API_URL}/api/tuitions/update/${id}`, { 
-        status: newStatus,
-        rejectReason: reason 
-      });
+      return await axios.patch(
+        `${API_URL}/api/tuitions/update/${id}`, 
+        { 
+          status: newStatus,
+          rejectReason: reason 
+        },
+        authConfig
+      );
     },
     onSuccess: () => {
-      queryClient.invalidateQueries(['tuitions']); // Refetch data
-      // Close Modals
+      queryClient.invalidateQueries(['tuitions']); 
       if (rejectModal.open) {
         setRejectModal({ open: false, id: null });
         setRejectReason("");
@@ -71,7 +95,7 @@ const TuitionManagement = () => {
     },
     onError: (err) => {
       console.error("Update failed:", err);
-      alert("Failed to update status. Please try again.");
+      alert(err.response?.data?.message || "Failed to update status. Please try again.");
     }
   });
 
@@ -86,10 +110,12 @@ const TuitionManagement = () => {
     }
   };
 
-  // --- 3. Filter Logic ---
-  const filteredTuitions = tuitions.filter(item => 
-    filter === 'All' ? true : item.status === filter.toLowerCase()
-  );
+  // --- 4. Filter Logic ---
+  const filteredTuitions = useMemo(() => {
+    return tuitions.filter(item => 
+        filter === 'All' ? true : item.status === filter.toLowerCase()
+    );
+  }, [tuitions, filter]);
 
   // Status Badge Helper
   const getStatusBadge = (status) => {
@@ -103,8 +129,8 @@ const TuitionManagement = () => {
   // --- Render States ---
   if (isLoading) return <Loading />;
 
-  if (isError) {
-    if (error.response?.status === 401 || error.response?.status === 403 || error.message === "Unauthorized") {
+  if (isError || !isUserValid) {
+    if (!isUserValid || error?.response?.status === 401 || error?.response?.status === 403 || error?.message === "Unauthorized") {
       return <Unauthorized />;
     }
     return <ServerDown />;
@@ -112,7 +138,7 @@ const TuitionManagement = () => {
 
   // --- Main UI ---
   return (
-    <div className="space-y-6 animate-fade-in-up p-4">
+    <div className="space-y-6 animate-fade-in-up p-4 md:p-8">
       
       {/* Header & Filter Tabs */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -219,7 +245,7 @@ const TuitionManagement = () => {
 
                     {/* Status Badge */}
                     <td className="px-6 py-4 text-center">
-                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-bold border capitalize ${getStatusBadge(item.status)}`}>
+                      <span className={`inline-block px-3 py-1 rounded-full text-xs font-bold capitalize ${getStatusBadge(item.status)}`}>
                         {item.status}
                       </span>
                     </td>
@@ -235,7 +261,7 @@ const TuitionManagement = () => {
                           <MdVisibility size={20} />
                         </button>
 
-                        {/* Approved থাকলেও রিজেক্ট অপশন রাখা ভালো, কিন্তু সাধারণ ফ্লো তে Pending এর জন্যই অ্যাকশন বাটন থাকে */}
+                        {/* Action Buttons (Only for Pending) */}
                         {item.status === 'pending' && (
                           <>
                             <button 
@@ -260,7 +286,7 @@ const TuitionManagement = () => {
                           </>
                         )}
                         
-                        {/* যদি Approved হয় তবুও রিজেক্ট করতে চান তাহলে এই অপশন রাখতে পারেন */}
+                        {/* Option to Reject if Approved (e.g., if issue is found later) */}
                          {item.status === 'approved' && (
                             <button 
                               onClick={() => {
@@ -402,8 +428,6 @@ const TuitionManagement = () => {
                         <button 
                             onClick={() => {
                                 handleStatusUpdate(viewData._id, 'approved');
-                                // The modal closes automatically via mutation success, 
-                                // but we can close immediately for better UX
                                 setViewData(null); 
                             }}
                             className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors shadow-lg shadow-emerald-200"

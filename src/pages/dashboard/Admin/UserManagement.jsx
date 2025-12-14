@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Swal from 'sweetalert2'; 
 import { 
   MdSearch, 
   MdDeleteOutline, 
@@ -10,13 +11,25 @@ import {
   MdHistory,
   MdClose,
   MdRefresh,
-  MdTimeline
+  MdTimeline,
+  MdLock
 } from 'react-icons/md';
 
 // Import Custom Components
 import Loading from '../../../components/common/Loading';
 import ServerDown from '../../common/ServerDown';
-import Unauthorized from '../../common/Unauthorized';
+
+// Mock Unauthorized component (or use the provided one)
+const Unauthorized = () => (
+    <div className="flex justify-center items-center h-screen bg-gray-50">
+        <div className="text-center p-8 bg-white rounded-xl shadow-lg border border-red-100">
+            <MdLock className="text-red-500 mx-auto mb-4" size={40} />
+            <h3 className="text-xl font-bold text-red-700">Access Restricted</h3>
+            <p className="text-gray-500 mt-2">You must be logged in as an Admin to access this feature.</p>
+        </div>
+    </div>
+);
+
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
@@ -27,24 +40,36 @@ const UserManagement = () => {
   // --- Local UI States ---
   const [searchTerm, setSearchTerm] = useState("");
   
-  // Modals State
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [userToDelete, setUserToDelete] = useState(null);
   
-  // Log Modal State
   const [showLogModal, setShowLogModal] = useState(false);
-  const [selectedUserForLog, setSelectedUserForLog] = useState(null);
-  const [userLogs, setUserLogs] = useState([]); 
+  const [selectedUserForLog, setSelectedUserForLog] = useState(null); 
 
-  // --- 1. Fetch Users (Query) ---
-  const fetchUsers = async () => {
-    // Optional: Add Auth Token Logic
-    const storedUser = JSON.parse(localStorage.getItem("user"));
-    if (!storedUser?.email) throw new Error("Unauthorized");
+  // --- 1. JWT Retrieval and Auth Config ---
+  const { authConfig, isAdminValid } = useMemo(() => {
+    const authToken = localStorage.getItem("token") || localStorage.getItem("jwtToken"); 
+    const userStr = localStorage.getItem("user");
+    const userRole = userStr ? JSON.parse(userStr)?.role : null;
 
-    const response = await axios.get(`${API_URL}/api/users`);
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
     
-    // Formatting data before returning
+    return { 
+        authConfig: config, 
+        isAdminValid: !!authToken && userRole === 'admin' 
+    };
+  }, []);
+
+  // --- 2. Fetch Users (Main Data Query - SECURED) ---
+  const fetchUsers = async () => {
+    if (!isAdminValid) throw new Error("Unauthorized");
+
+    const response = await axios.get(`${API_URL}/api/users`, authConfig);
+    
     return response.data.data.map(user => ({
       ...user,
       status: user.status || 'Active',
@@ -57,21 +82,81 @@ const UserManagement = () => {
   const { data: users = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['users'],
     queryFn: fetchUsers,
+    enabled: isAdminValid, 
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 5, // Cache for 5 mins
+    staleTime: 1000 * 60 * 5, 
+    retry: 1
   });
 
-  // --- 2. Action: Block/Unblock (Mutation) ---
+  // --- 3. NEW: Fetch User Logs (Nested Query - SECURED) ---
+  const fetchUserLogs = async ({ queryKey }) => {
+    const userId = queryKey[1]; 
+    if (!userId) return [];
+    
+    const response = await axios.get(`${API_URL}/api/admin/users/${userId}/logs`, authConfig);
+    
+    // Mocked response structure for safety, assuming real logs are simple objects
+    return response.data.data.map(log => ({
+        id: log._id || log.id,
+        action: log.action || 'Unknown Action',
+        time: new Date(log.time).toLocaleTimeString() + ' ' + new Date(log.time).toLocaleDateString(),
+        type: log.type || 'info' // success, warning, error, info
+    }));
+  };
+
+  const { 
+    data: userLogs = [], 
+    isLoading: isLogsLoading, 
+    isFetching: isLogsFetching
+  } = useQuery({
+    queryKey: ['userLogs', selectedUserForLog?._id], 
+    queryFn: fetchUserLogs,
+    enabled: showLogModal && !!selectedUserForLog?._id && isAdminValid, 
+    staleTime: 1000 * 60, 
+    retry: 1,
+  });
+
+
+  // --- 4. Action: Block/Unblock (Mutation - SECURED) ---
   const statusMutation = useMutation({
     mutationFn: async (userId) => {
-      return await axios.put(`${API_URL}/api/users/${userId}/status`);
+      const response = await axios.put(`${API_URL}/api/users/${userId}/status`, {}, authConfig);
+      return response.data.data; 
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['users']); // Refetch data
+    onSuccess: (updatedUser) => {
+      queryClient.invalidateQueries(['users']); 
+      
+      if (!updatedUser || !updatedUser.status) {
+          Swal.fire({
+              icon: 'warning',
+              title: 'Partial Update!',
+              text: 'Status changed, but received incomplete user data from server.',
+              timer: 3000,
+              confirmButtonColor: '#F59E0B'
+          });
+          return;
+      }
+      
+      const newStatus = updatedUser.status;
+      const userName = updatedUser.name || 'User';
+
+      Swal.fire({
+          icon: 'success',
+          title: 'Status Updated!',
+          text: `${userName}'s account is now ${newStatus}.`,
+          showConfirmButton: false,
+          timer: 2000,
+          timerProgressBar: true
+      });
     },
-    onError: (err) => {
-      console.error("Status update failed", err);
-      alert("Failed to update status.");
+    onError: (err, userId) => {
+      const errorMessage = err.response?.data?.message || `Failed to update status for user ID: ${userId}.`;
+      Swal.fire({
+          icon: 'error',
+          title: 'Operation Failed',
+          text: errorMessage,
+          confirmButtonColor: '#EF4444'
+      });
     }
   });
 
@@ -79,19 +164,33 @@ const UserManagement = () => {
     statusMutation.mutate(user._id);
   };
 
-  // --- 3. Action: Delete (Mutation) ---
+  // --- 5. Action: Delete (Mutation - SECURED) ---
   const deleteMutation = useMutation({
     mutationFn: async (userId) => {
-      return await axios.delete(`${API_URL}/api/users/${userId}`);
+      return await axios.delete(`${API_URL}/api/users/${userId}`, authConfig);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['users']); // Refetch data
+    onSuccess: (_, userId) => {
+      queryClient.invalidateQueries(['users']); 
       setShowDeleteModal(false);
+      
+      Swal.fire({
+        icon: 'success',
+        title: 'User Deleted!',
+        text: `User with ID ${userId.slice(-6)} has been permanently removed.`,
+        showConfirmButton: false,
+        timer: 2000,
+        timerProgressBar: true
+      });
       setUserToDelete(null);
     },
     onError: (err) => {
-      console.error("Delete failed", err);
-      alert("Failed to delete user.");
+      const errorMessage = err.response?.data?.message || 'Failed to delete user.';
+      Swal.fire({
+        icon: 'error',
+        title: 'Deletion Failed',
+        text: errorMessage,
+        confirmButtonColor: '#EF4444'
+      });
     }
   });
 
@@ -106,19 +205,17 @@ const UserManagement = () => {
     }
   };
 
-  // --- 4. Action: View Logs (Mock Data) ---
+  // --- 6. Action: View Logs Handler ---
   const handleViewLogs = (user) => {
     setSelectedUserForLog(user);
-    // TODO: Connect to backend API for real logs in future
-    const mockLogs = [
-      { id: 1, action: "Account Created", time: user.joinDate, type: "success" },
-      { id: 2, action: "Logged in via Google", time: "Today, 10:30 AM", type: "info" },
-      { id: 3, action: "Updated Profile Picture", time: "Yesterday, 4:15 PM", type: "info" },
-      ...(user.status === 'Blocked' ? [{ id: 4, action: "Account Blocked by Admin", time: "Just Now", type: "warning" }] : [])
-    ];
-    setUserLogs(mockLogs);
-    setShowLogModal(true);
+    setShowLogModal(true); 
   };
+  
+  const closeLogModal = () => {
+      setShowLogModal(false);
+      setSelectedUserForLog(null); 
+  };
+
 
   // --- Filter Logic ---
   const filteredUsers = users.filter(user => 
@@ -129,11 +226,8 @@ const UserManagement = () => {
   // --- Render States ---
   if (isLoading) return <Loading />;
 
-  if (isError) {
-    if (error.response?.status === 401 || error.response?.status === 403 || error.message === "Unauthorized") {
-      return <Unauthorized />;
-    }
-    return <ServerDown />;
+  if (isError || !isAdminValid) {
+    return <Unauthorized />; 
   }
 
   return (
@@ -280,14 +374,14 @@ const UserManagement = () => {
         </div>
       </div>
 
-      {/* --- Activity Log Modal (Cute) --- */}
+      {/* --- Activity Log Modal (Real Data Structure) --- */}
       {showLogModal && selectedUserForLog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-indigo-900/20 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-md overflow-hidden animate-scale-up border border-white/50">
             {/* Modal Header */}
             <div className="bg-gradient-to-r from-indigo-500 to-purple-600 p-6 text-white relative">
               <button 
-                onClick={() => setShowLogModal(false)}
+                onClick={closeLogModal}
                 className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/30 rounded-full transition-colors text-white"
               >
                 <MdClose size={20}/>
@@ -306,36 +400,44 @@ const UserManagement = () => {
             {/* Modal Body: Timeline */}
             <div className="p-6 max-h-[400px] overflow-y-auto scrollbar-thin scrollbar-thumb-indigo-100">
               <h4 className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-5">
-                <MdTimeline className="text-indigo-500"/> Activity History
-              </h4>
+                <MdTimeline className="text-indigo-500"/> Activity History               </h4>
               
-              <div className="space-y-6 relative pl-2">
-                {/* Vertical Line */}
-                <div className="absolute left-[19px] top-2 bottom-2 w-0.5 bg-gray-100"></div>
+              {isLogsLoading || isLogsFetching ? (
+                <div className="text-center py-10">
+                  <div className="w-6 h-6 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-3"></div>
+                  <p className="text-sm text-gray-500">Fetching user history from API...</p>
+                </div>
+              ) : userLogs.length === 0 ? (
+                <p className="text-center text-gray-400 py-10">No recent activity found in the database.</p>
+              ) : (
+                <div className="space-y-6 relative pl-2">
+                  {/* Vertical Line */}
+                  <div className="absolute left-[19px] top-2 bottom-2 w-0.5 bg-gray-100"></div>
 
-                {userLogs.map((log) => (
-                  <div key={log.id} className="relative flex gap-4 items-start group">
-                    {/* Dot */}
-                    <div className={`
-                      relative z-10 w-4 h-4 rounded-full border-2 border-white shadow-sm shrink-0 mt-1
-                      ${log.type === 'success' ? 'bg-emerald-400' : 
-                        log.type === 'warning' ? 'bg-orange-400' : 'bg-indigo-400'}
-                    `}></div>
-                    
-                    {/* Content Card */}
-                    <div className="flex-1 bg-gray-50 rounded-xl p-3 border border-gray-100 group-hover:bg-indigo-50/50 transition-colors">
-                      <p className="text-xs text-gray-800 font-semibold">{log.action}</p>
-                      <p className="text-[10px] text-gray-400 mt-1 font-medium">{log.time}</p>
+                  {userLogs.map((log) => (
+                    <div key={log.id} className="relative flex gap-4 items-start group">
+                      {/* Dot */}
+                      <div className={`
+                        relative z-10 w-4 h-4 rounded-full border-2 border-white shadow-sm shrink-0 mt-1
+                        ${log.type === 'success' ? 'bg-emerald-400' : 
+                          log.type === 'warning' ? 'bg-orange-400' : 'bg-indigo-400'}
+                      `}></div>
+                      
+                      {/* Content Card */}
+                      <div className="flex-1 bg-gray-50 rounded-xl p-3 border border-gray-100 group-hover:bg-indigo-50/50 transition-colors">
+                        <p className="text-xs text-gray-800 font-semibold">{log.action}</p>
+                        <p className="text-[10px] text-gray-400 mt-1 font-medium">{log.time}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Modal Footer */}
             <div className="p-4 bg-gray-50 border-t border-gray-100 text-center">
               <button 
-                onClick={() => setShowLogModal(false)}
+                onClick={closeLogModal}
                 className="text-sm font-bold text-indigo-500 hover:text-indigo-700 transition-colors"
               >
                 Close History
@@ -345,7 +447,7 @@ const UserManagement = () => {
         </div>
       )}
 
-      {/* --- Delete Confirmation Modal (Consistent Cute Style) --- */}
+      {/* --- Delete Confirmation Modal --- */}
       {showDeleteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-indigo-900/20 backdrop-blur-sm">
           <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-sm overflow-hidden animate-scale-up border border-white/50">

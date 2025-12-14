@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Swal from 'sweetalert2'; 
 import { 
   MdCheckCircle, 
   MdCancel, 
@@ -11,12 +12,14 @@ import {
   MdMessage,
   MdClose,
   MdRefresh,
-  MdAttachMoney
+  MdAttachMoney,
+  MdFilterList 
 } from 'react-icons/md';
 
 // Import Custom Components
 import Loading from '../../../components/common/Loading';
 import ServerDown from '../../common/ServerDown';
+import Unauthorized from '../../common/Unauthorized'; 
 
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
@@ -25,48 +28,112 @@ const ApplicationManagement = () => {
   const queryClient = useQueryClient();
   
   // --- Local UI States ---
-  const [filter, setFilter] = useState('All'); // 'All', 'Pending', 'Shortlisted', 'Rejected'
-  const [selectedApp, setSelectedApp] = useState(null); // For Modal
+  const [filter, setFilter] = useState('All'); 
+  const [selectedApp, setSelectedApp] = useState(null); 
 
-  // --- 1. Fetch Applications (Query) ---
+  // --- 1. JWT Retrieval and Auth Config ---
+  const { authConfig, isUserValid } = useMemo(() => {
+    const userStr = localStorage.getItem('user');
+    if (!userStr) return { authConfig: {}, isUserValid: false };
+    
+    const userData = JSON.parse(userStr);
+    
+    const authToken = userData.token || userData.jwtToken || 
+                      localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+    
+    return { 
+        authConfig: config, 
+        isUserValid: !!authToken && userData?.role === 'admin' 
+    };
+  }, []);
+  
+  // --- 2. Fetch Applications (Query - SECURED) ---
   const fetchApplications = async () => {
-    const res = await axios.get(`${API_URL}/api/applications/all`);
-    // Assuming API returns { status: "success", data: [...] }
+    const res = await axios.get(`${API_URL}/api/applications/all`, authConfig); 
     return res.data.data; 
   };
 
-  const { data: applications = [], isLoading, isError, refetch } = useQuery({
+  const { data: applications = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['applications'],
     queryFn: fetchApplications,
-    refetchOnWindowFocus: false, // Prevent refetching when switching tabs
+    enabled: isUserValid, 
+    refetchOnWindowFocus: false, 
+    retry: 1
   });
 
-  // --- 2. Update Status (Mutation) ---
+  // --- 3. Update Status (Mutation - SECURED) ---
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, newStatus }) => {
-      return await axios.patch(`${API_URL}/api/applications/update-status/${id}`, { status: newStatus });
+      return await axios.patch(
+        `${API_URL}/api/applications/update-status/${id}`, 
+        { status: newStatus },
+        authConfig
+      );
     },
     onSuccess: (data, variables) => {
-      // Invalidate and refetch queries to update the list UI
       queryClient.invalidateQueries(['applications']);
       
-      // Close modal if the updated item was selected
+      Swal.fire({
+        icon: 'success',
+        title: 'Status Updated!',
+        text: `Application status changed to ${variables.newStatus}.`,
+        timer: 3000,
+        showConfirmButton: false,
+        toast: true,
+        position: 'top-end',
+      });
+
       if (selectedApp && selectedApp._id === variables.id) {
-        setSelectedApp(null);
+        setSelectedApp(prev => ({ ...prev, status: variables.newStatus }));
       }
     },
     onError: (error) => {
-      console.error("Update failed:", error);
-      alert("Failed to update status. Please try again.");
+      const msg = error.response?.data?.message || "Failed to update status. Please try again.";
+      
+      Swal.fire({
+        icon: 'error',
+        title: 'Update Failed',
+        text: msg,
+      });
     }
   });
 
-  // Wrapper for handling status change
-  const handleStatusChange = (id, newStatus) => {
-    updateStatusMutation.mutate({ id, newStatus });
+  // Wrapper for handling status change (Uses SweetAlert2 for Confirmation)
+  const handleStatusChange = async (id, newStatus) => {
+    
+    let icon = 'warning';
+    let confirmButtonColor = '#4f46e5'; // Indigo for Shortlist
+    if (newStatus === 'Rejected') {
+        icon = 'error';
+        confirmButtonColor = '#d33'; // Red for Reject
+    } else if (newStatus === 'Hired') {
+        icon = 'success';
+        confirmButtonColor = '#10b981'; // Green for Hired
+    }
+
+    const result = await Swal.fire({
+      title: 'Are you sure?',
+      text: `You are about to change the status to "${newStatus}". This action can be crucial.`,
+      icon: icon,
+      showCancelButton: true,
+      confirmButtonColor: confirmButtonColor,
+      cancelButtonColor: '#6b7280',
+      confirmButtonText: `Yes, ${newStatus} it!`,
+      cancelButtonText: 'No, Cancel',
+    });
+
+    if (result.isConfirmed) {
+      updateStatusMutation.mutate({ id, newStatus });
+    }
   };
 
-  // --- 3. Filter Logic ---
+  // --- 4. Filter Logic ---
   const filteredApps = applications.filter(app => 
     filter === 'All' ? true : app.status === filter
   );
@@ -76,13 +143,25 @@ const ApplicationManagement = () => {
     switch(status) {
       case 'Shortlisted': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
       case 'Rejected': return 'bg-red-100 text-red-700 border-red-200';
+      case 'Hired': return 'bg-green-100 text-green-700 border-green-200'; 
       default: return 'bg-amber-100 text-amber-700 border-amber-200'; // Pending
     }
   };
 
   // --- Render States ---
   if (isLoading) return <Loading />;
-  if (isError) return <ServerDown />;
+  
+  if (!isUserValid) {
+    return <Unauthorized message="You must be logged in as an Admin to view this page." />;
+  }
+  
+  if (isError) {
+    const status = error.response?.status;
+    if (status === 401 || status === 403) {
+      return <Unauthorized message="Session expired or forbidden access." />;
+    }
+    return <ServerDown />;
+  }
 
   return (
     <div className="space-y-6 animate-fade-in-up p-4 md:p-8">
@@ -105,13 +184,14 @@ const ApplicationManagement = () => {
             onClick={() => refetch()} 
             className="p-2 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"
             title="Refresh Data"
+            disabled={isLoading}
           >
             <MdRefresh size={20} className={isLoading ? "animate-spin" : ""} />
           </button>
 
           {/* Filter Tabs */}
           <div className="bg-white p-1 rounded-xl border border-gray-200 shadow-sm flex gap-1">
-            {['All', 'Pending', 'Shortlisted', 'Rejected'].map((tab) => (
+            {['All', 'Pending', 'Shortlisted', 'Rejected', 'Hired'].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setFilter(tab)}
@@ -175,8 +255,8 @@ const ApplicationManagement = () => {
 
                     {/* Salary */}
                     <td className="px-6 py-4">
-                       <span className="bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs font-bold border border-gray-200">
-                         {app.expectedSalary} BDT
+                       <span className="bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs font-bold border border-gray-200 flex items-center gap-1">
+                         <MdAttachMoney size={14} /> {app.expectedSalary} BDT
                        </span>
                     </td>
 
@@ -199,27 +279,35 @@ const ApplicationManagement = () => {
                           <MdVisibility size={20} />
                         </button>
 
-                        {/* Action Buttons (Only for Pending) */}
-                        {app.status === 'Pending' && (
+                        {/* Action Buttons (Only for Pending/Shortlisted) */}
+                        {['Pending', 'Shortlisted'].includes(app.status) && (
                           <>
-                            <button 
-                              onClick={() => handleStatusChange(app._id, 'Shortlisted')}
-                              disabled={updateStatusMutation.isPending}
-                              className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50"
-                              title="Shortlist"
-                            >
-                              <MdCheckCircle size={20} />
-                            </button>
-                            <button 
-                              onClick={() => handleStatusChange(app._id, 'Rejected')}
-                              disabled={updateStatusMutation.isPending}
-                              className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
-                              title="Reject"
-                            >
-                              <MdCancel size={20} />
-                            </button>
+                            {/* Shortlist/Accept */}
+                            {app.status !== 'Shortlisted' && (
+                                <button 
+                                onClick={() => handleStatusChange(app._id, 'Shortlisted')}
+                                disabled={updateStatusMutation.isPending}
+                                className="p-2 text-emerald-500 hover:bg-emerald-50 rounded-lg transition-colors disabled:opacity-50"
+                                title="Shortlist"
+                                >
+                                <MdCheckCircle size={20} />
+                                </button>
+                            )}
+
+                            {/* Reject */}
+                            {app.status !== 'Rejected' && (
+                                <button 
+                                onClick={() => handleStatusChange(app._id, 'Rejected')}
+                                disabled={updateStatusMutation.isPending}
+                                className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50"
+                                title="Reject"
+                                >
+                                <MdCancel size={20} />
+                                </button>
+                            )}
                           </>
                         )}
+                        {/* If Hired/Rejected, show no action buttons */}
                       </div>
                     </td>
                   </tr>
@@ -300,23 +388,27 @@ const ApplicationManagement = () => {
             </div>
 
             {/* Modal Footer (Actions) */}
-            {selectedApp.status === 'Pending' && (
+            {selectedApp.status === 'Pending' || selectedApp.status === 'Shortlisted' ? (
               <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-3">
                 <button 
                   onClick={() => handleStatusChange(selectedApp._id, 'Rejected')}
-                  disabled={updateStatusMutation.isPending}
+                  disabled={updateStatusMutation.isPending || selectedApp.status === 'Rejected'}
                   className="flex-1 py-3 rounded-xl border border-red-200 text-red-600 font-bold hover:bg-red-50 transition-colors disabled:opacity-50"
                 >
                   {updateStatusMutation.isPending ? 'Processing...' : 'Reject'}
                 </button>
                 <button 
                   onClick={() => handleStatusChange(selectedApp._id, 'Shortlisted')}
-                  disabled={updateStatusMutation.isPending}
+                  disabled={updateStatusMutation.isPending || selectedApp.status === 'Shortlisted'}
                   className="flex-1 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-colors disabled:opacity-50"
                 >
-                  {updateStatusMutation.isPending ? 'Processing...' : 'Shortlist Tutor'}
+                  {updateStatusMutation.isPending ? 'Processing...' : selectedApp.status === 'Shortlisted' ? 'Shortlisted' : 'Shortlist Tutor'}
                 </button>
               </div>
+            ) : (
+                <div className="p-4 bg-gray-50 border-t border-gray-100 text-center text-sm text-gray-500">
+                    Status is Final ({selectedApp.status}).
+                </div>
             )}
           </div>
         </div>

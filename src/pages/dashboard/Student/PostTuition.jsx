@@ -11,7 +11,6 @@ import {
 
 // --- Custom Components ---
 import ServerDown from '../../common/ServerDown';
-import Unauthorized from '../../common/Unauthorized';
 
 // --- Configuration ---
 const API_URL = import.meta.env.VITE_API_URL;
@@ -35,36 +34,47 @@ const PostTuition = () => {
   };
   const [formData, setFormData] = useState(initialFormState);
 
-  // --- 2. User Authentication Check ---
-  // Using useMemo to prevent recalculation on every render
-  const user = useMemo(() => {
-    const storedUser = localStorage.getItem('user');
-    return storedUser ? JSON.parse(storedUser) : null;
+  // --- 2. User Authentication Check & Token Retrieval ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
+    const userStr = localStorage.getItem('user');
+    if (!userStr) {
+      return { user: null, authConfig: {}, isUserValid: false };
+    }
+
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem('jwtToken'); 
+    
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config, 
+        isUserValid: !!userData.email && !!authToken
+    };
   }, []);
 
-  // Redirect if not logged in (Side Effect)
+  // Redirect if not logged in
   useEffect(() => {
-    if (!user) {
-      // Optional: Show a toast before redirecting
+    if (!isUserValid) {
       const timer = setTimeout(() => navigate('/login'), 2000);
       return () => clearTimeout(timer);
     }
-  }, [user, navigate]);
+  }, [isUserValid, navigate]);
 
   // --- 3. Mutation for Form Submission ---
   const mutation = useMutation({
     mutationFn: async (payload) => {
-      const response = await axios.post(`${API_URL}/api/tuitions/create`, payload);
+      const response = await axios.post(`${API_URL}/api/tuitions/create`, payload, authConfig);
       return response.data;
     },
     onSuccess: () => {
-      // Invalidate queries to refresh lists in other components
       queryClient.invalidateQueries(['myTuitions']);
-      
-      // Reset Form
       setFormData(initialFormState);
 
-      // Show Success Modal via SweetAlert
       Swal.fire({
         title: 'Success!',
         text: 'Your tuition post has been submitted and is Pending Review.',
@@ -81,7 +91,15 @@ const PostTuition = () => {
       });
     },
     onError: (error) => {
-      const errorMessage = error.response?.data?.message || "Something went wrong.";
+      const status = error.response?.status;
+      let errorMessage = error.response?.data?.message || "Something went wrong.";
+
+      if (status === 401 || status === 403) {
+        errorMessage = "Session expired or unauthorized. Please log in again.";
+        localStorage.removeItem('user');
+        navigate('/login');
+      }
+
       Swal.fire({
         icon: 'error',
         title: 'Submission Failed',
@@ -100,13 +118,19 @@ const PostTuition = () => {
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    if (!user) return;
+    if (!isUserValid) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Authentication Required',
+        text: 'You must be logged in to post a tuition.',
+      });
+      return;
+    }
 
-    // Prepare Payload
     const payload = {
       ...formData,
-      studentName: user.name,
-      studentEmail: user.email,
+      studentName: user.name, 
+      studentEmail: user.email, 
       status: 'pending'
     };
 
@@ -116,10 +140,9 @@ const PostTuition = () => {
   // --- 5. Helper Logic ---
   const isDiplomaStudent = formData.class.includes("Diploma");
 
-  // --- 6. Render Logic (Auth Guards) ---
-  if (!user) return <Unauthorized />;
+  // --- 6. Render Logic (Auth Guards & Server Check) ---
+  if (!isUserValid) return null; 
   
-  // Handle Server Errors globally for this page context if needed
   if (mutation.error?.response?.status >= 500) return <ServerDown />;
 
   return (

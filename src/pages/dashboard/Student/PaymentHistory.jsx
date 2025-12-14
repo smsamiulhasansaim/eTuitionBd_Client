@@ -21,16 +21,35 @@ const PaymentHistory = () => {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  // --- 1. User Authentication Check & Setup ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
     const userStr = localStorage.getItem("user");
     if (!userStr) {
-      navigate("/login");
-      return null;
+      return { user: null, authConfig: {}, isUserValid: false };
     }
-    return JSON.parse(userStr);
-  }, [navigate]);
+    
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem("jwtToken"); 
 
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config, 
+        isUserValid: !!userData.email && !!authToken
+    };
+  }, []);
+
+  // --- Handle Redirect if not logged in ---
+  if (!isUserValid) {
+    navigate("/login");
+    return null;
+  }
+  
   // --- 2. Data Fetching (TanStack Query) ---
   const { 
     data: payments = [], 
@@ -40,17 +59,20 @@ const PaymentHistory = () => {
   } = useQuery({
     queryKey: ['paymentHistory', user?.email],
     queryFn: async () => {
-      if (!user?.email) return [];
-      const response = await axios.get(`${API_URL}/api/payment/my-payments?email=${user.email}`);
+      if (!isUserValid) return [];
+      
+      const studentEmail = user.email;
+      
+      // Assuming backend needs email as query parameter for specificity
+      const response = await axios.get(`${API_URL}/api/payment/my-payments?email=${studentEmail}`, authConfig);
       return response.data.data;
     },
-    enabled: !!user?.email, // Only fetch if user exists
+    enabled: isUserValid, 
     retry: 1
   });
 
   // --- 3. Optimized Filtering & Calculations (useMemo) ---
   
-  // Filter Logic
   const filteredPayments = useMemo(() => {
     return payments.filter(payment => 
       payment.tutorName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -59,7 +81,6 @@ const PaymentHistory = () => {
     );
   }, [payments, searchTerm]);
 
-  // Total Spent Calculation
   const totalSpent = useMemo(() => {
     return payments.reduce((acc, curr) => acc + (curr.amount || 0), 0);
   }, [payments]);
@@ -85,7 +106,7 @@ const PaymentHistory = () => {
     Swal.fire({
       icon: 'info',
       title: 'Invoice Generation',
-      text: `Invoice for ${transactionId.substring(0, 8)}... is being generated. This feature is coming soon!`,
+      text: `Invoice for ${transactionId?.substring(0, 8) || 'N/A'}... is being generated. This feature is coming soon!`,
       confirmButtonColor: '#10B981',
     });
   };

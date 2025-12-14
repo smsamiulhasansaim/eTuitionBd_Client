@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
@@ -6,13 +6,12 @@ import {
   MdLock, MdSave, MdVisibility, MdVisibilityOff, MdCheckCircle 
 } from 'react-icons/md';
 
-// Import Custom Components (Updated Paths)
+// Import Custom Components
 import Loading from '../../../components/common/Loading';
 import ServerDown from '../../common/ServerDown';
 import Unauthorized from '../../common/Unauthorized';
 
 // API Configuration
-// Ensure VITE_API_URL is set in your .env file
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 const AdminProfile = () => {
@@ -23,8 +22,7 @@ const AdminProfile = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   
-  // State for Form Inputs
-  const [adminForm, setAdminForm] = useState({
+  const initialFormState = {
     name: "",
     email: "",
     phone: "",
@@ -32,25 +30,45 @@ const AdminProfile = () => {
     location: "",
     bio: "",
     img: "" 
-  });
+  };
 
-  // State for Password Management
+  const [adminForm, setAdminForm] = useState(initialFormState);
+
   const [passwords, setPasswords] = useState({
     current: "",
     new: "",
     confirm: ""
   });
 
-  // --- 1. Fetch Admin Profile Logic ---
+  // --- 1. JWT Retrieval and Auth Config ---
+  const { authConfig, isUserValid, adminEmail } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) return { authConfig: {}, isUserValid: false, adminEmail: null };
+    
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        authConfig: config, 
+        isUserValid: !!userData.email && !!authToken,
+        adminEmail: userData.email
+    };
+  }, []);
+
+  // --- 2. Fetch Admin Profile Logic (SECURED) ---
   const fetchProfile = async () => {
-    // Retrieve user identity from LocalStorage
-    const storedUser = JSON.parse(localStorage.getItem("user")); 
-    const email = storedUser?.email;
-
-    // If no email found in local storage, treat as unauthorized
-    if (!email) throw new Error("Unauthorized"); 
-
-    const res = await axios.get(`${API_URL}/api/users/profile?email=${email}`);
+    if (!isUserValid) throw new Error("Unauthorized");
+    
+    const res = await axios.get(
+        `${API_URL}/api/users/profile?email=${adminEmail}`, 
+        authConfig
+    );
     return res.data.data;
   };
 
@@ -58,11 +76,12 @@ const AdminProfile = () => {
   const { data: profileData, isLoading, isError, error } = useQuery({
     queryKey: ['adminProfile'],
     queryFn: fetchProfile,
-    retry: 1, // Retry once before failing
-    refetchOnWindowFocus: false, // Prevent unnecessary refetches
+    enabled: isUserValid,
+    retry: 1,
+    refetchOnWindowFocus: false,
   });
 
-  // --- 2. Sync Server Data to Local State ---
+  // --- 3. Sync Server Data to Local State ---
   useEffect(() => {
     if (profileData) {
       setAdminForm({
@@ -70,28 +89,29 @@ const AdminProfile = () => {
         email: profileData.email || "",
         phone: profileData.phone || "",
         role: profileData.role || "Admin",
-        location: profileData.address || "", // Mapping DB 'address' to UI 'location'
+        location: profileData.address || "", 
         bio: profileData.bio || "",
         img: profileData.image || ""
       });
     }
   }, [profileData]);
 
-  // --- 3. Mutation: Update Profile ---
+  // --- 4. Mutation: Update Profile (SECURED) ---
   const updateProfileMutation = useMutation({
     mutationFn: async (updatedData) => {
       const payload = {
         ...updatedData,
-        address: updatedData.location, // Mapping UI 'location' back to DB 'address'
-        image: updatedData.img
+        address: updatedData.location,
+        image: updatedData.img,
+        email: adminForm.email 
       };
-      return await axios.put(`${API_URL}/api/users/profile`, payload);
+      
+      return await axios.put(`${API_URL}/api/users/profile`, payload, authConfig);
     },
     onSuccess: () => {
       setIsSaved(true);
-      queryClient.invalidateQueries(['adminProfile']); // Refresh data from server
+      queryClient.invalidateQueries(['adminProfile']);
       
-      // Update LocalStorage to keep UI consistent instantly (Optional but recommended)
       const currentUser = JSON.parse(localStorage.getItem("user"));
       if(currentUser) {
         localStorage.setItem("user", JSON.stringify({ 
@@ -101,30 +121,31 @@ const AdminProfile = () => {
         }));
       }
       
-      // Reset success message after 3 seconds
       setTimeout(() => setIsSaved(false), 3000);
     },
     onError: (err) => {
       console.error("Update failed:", err);
-      alert("Failed to update profile. Please try again.");
+      alert(err.response?.data?.message || "Failed to update profile. Please try again.");
     }
   });
 
-  // --- 4. Mutation: Change Password ---
+  // --- 5. Mutation: Change Password (SECURED) ---
   const changePasswordMutation = useMutation({
     mutationFn: async (passData) => {
-      return await axios.put(`${API_URL}/api/users/change-password`, {
+      const payload = {
         email: adminForm.email,
         currentPassword: passData.current,
         newPassword: passData.new
-      });
+      };
+      
+      return await axios.put(`${API_URL}/api/users/change-password`, payload, authConfig);
     },
     onSuccess: () => {
       alert("Password changed successfully!");
       setPasswords({ current: "", new: "", confirm: "" });
     },
     onError: (err) => {
-      alert(err.response?.data?.message || "Failed to change password");
+      alert(err.response?.data?.message || "Failed to change password. Check your current password.");
     }
   });
 
@@ -137,7 +158,6 @@ const AdminProfile = () => {
     setPasswords({ ...passwords, [e.target.name]: e.target.value });
   };
 
-  // Convert uploaded image to Base64 for preview and upload
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -159,23 +179,19 @@ const AdminProfile = () => {
       return alert("New password and confirm password do not match!");
     }
     if (!passwords.current || !passwords.new) {
-      return alert("Please fill all password fields.");
+      return alert("Please fill all required password fields.");
     }
     changePasswordMutation.mutate(passwords);
   };
 
   // --- Render States ---
   
-  // 1. Loading State
   if (isLoading) return <Loading />;
 
-  // 2. Error Handling
-  if (isError) {
-    // Check specific HTTP status codes for Unauthorized access (401/403)
-    if (error.response?.status === 401 || error.response?.status === 403 || error.message === "Unauthorized") {
+  if (isError || !isUserValid) {
+    if (!isUserValid || error?.response?.status === 401 || error?.response?.status === 403 || error?.message === "Unauthorized") {
       return <Unauthorized />;
     }
-    // Default fallback for other errors (Server Down/Network Error/500)
     return <ServerDown />;
   }
 

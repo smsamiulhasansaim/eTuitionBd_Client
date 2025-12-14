@@ -12,7 +12,6 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
 } from 'recharts';
 
-// --- Custom Components ---
 import Loading from '../../../components/common/Loading';
 import ServerDown from '../../common/ServerDown';
 import Unauthorized from '../../common/Unauthorized';
@@ -23,84 +22,88 @@ const API_URL = import.meta.env.VITE_API_URL;
 const StudentDashboardHome = () => {
   const navigate = useNavigate();
   
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  // --- Auth Setup ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
     const userStr = localStorage.getItem("user");
     if (!userStr) {
       navigate("/login");
-      return null;
+      return { user: null, authConfig: {}, isUserValid: false };
     }
-    return JSON.parse(userStr);
+    
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem("jwtToken"); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config, 
+        isUserValid: !!userData.email && !!authToken 
+    };
   }, [navigate]);
 
-  // --- 2. Data Fetching (Parallel Queries) ---
+  if (!isUserValid) {
+    return <Unauthorized />; 
+  }
 
-  // Query A: Fetch My Tuitions (For Stats & Recent Posts)
-  const { 
-    data: tuitions = [], 
-    isLoading: loadingTuitions, 
-    isError: errorTuitions,
-    error: errObjTuitions
-  } = useQuery({
+  // --- Data Fetching Queries ---
+
+  const { data: tuitions = [], isLoading: loadingTuitions, error: errObjTuitions } = useQuery({
     queryKey: ['myTuitions', user?.email],
     queryFn: async () => {
-      const res = await axios.get(`${API_URL}/api/tuitions/my-tuitions?email=${user.email}`);
+      const res = await axios.get(`${API_URL}/api/tuitions/my-tuitions`, authConfig);
       return res.data.data || [];
     },
-    enabled: !!user?.email, // Only run if user exists
+    enabled: isUserValid,
+    retry: 1,
   });
 
-  // Query B: Fetch Payments (For Total Spent & Chart)
-  const { 
-    data: payments = [], 
-    isLoading: loadingPayments,
-    isError: errorPayments,
-    error: errObjPayments
-  } = useQuery({
+  const { data: payments = [], isLoading: loadingPayments, error: errObjPayments } = useQuery({
     queryKey: ['myPayments', user?.email],
     queryFn: async () => {
-      const res = await axios.get(`${API_URL}/api/payment/my-payments?email=${user.email}`);
+      const res = await axios.get(`${API_URL}/api/payment/my-payments`, authConfig);
       return res.data.data || [];
     },
-    enabled: !!user?.email,
+    enabled: isUserValid,
+    retry: 1,
   });
 
-  // Query C: Fetch Applications (For Notifications/Pending)
-  const { 
-    data: applications = [], 
-    isLoading: loadingApps,
-    isError: errorApps,
-    error: errObjApps
-  } = useQuery({
+  const { data: applications = [], isLoading: loadingApps, error: errObjApps } = useQuery({
     queryKey: ['myApplications', user?.email],
     queryFn: async () => {
-      const res = await axios.get(`${API_URL}/api/applications/student-view?email=${user.email}`);
+      const res = await axios.get(`${API_URL}/api/applications/student-view`, authConfig);
       return res.data.data || [];
     },
-    enabled: !!user?.email,
+    enabled: isUserValid,
+    retry: 1,
   });
 
-  // --- 3. Data Processing (Memoized for Performance) ---
+  // --- Data Processing ---
   
   const dashboardData = useMemo(() => {
     if (loadingTuitions || loadingPayments || loadingApps) return null;
 
-    // A. Calculate Stats
+    // A. Stats Calculation
     const pendingPosts = tuitions.filter(t => t.status === 'pending').length;
     const approvedPosts = tuitions.filter(t => t.status === 'approved').length;
     const totalSpent = payments.reduce((acc, curr) => acc + (curr.amount || 0), 0);
-    const pendingAppsCount = applications.length; // Assuming API returns filtered shortlisted apps
+    const pendingAppsCount = applications.filter(a => a.status === 'Pending' || a.status === 'Shortlisted').length; 
 
-    // B. Process Chart Data (Last 6 Months)
+    // B. Process Chart Data (Last 6 Months Spending)
     const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     const chartData = [];
+    const now = new Date();
+
     for (let i = 5; i >= 0; i--) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - i);
+      const d = new Date(now);
+      d.setMonth(now.getMonth() - i);
       const monthIdx = d.getMonth();
       const year = d.getFullYear();
       
-      // Sum payments for this specific month/year
       const monthlyTotal = payments
         .filter(p => {
           const pDate = new Date(p.date);
@@ -114,37 +117,37 @@ const StudentDashboardHome = () => {
       });
     }
 
-    // C. Generate Activity Feed (Merge & Sort)
+    // C. Generate Activity Feed (Merge & Sort by time)
     const feed = [
-      ...tuitions.map(t => ({
-        type: 'post',
-        text: `You posted tuition for "${t.subject}"`,
-        time: t.createdAt,
-        icon: FileText,
-        color: 'text-blue-500',
-        bg: 'bg-blue-100'
+      ...tuitions.map(t => ({ 
+          type: 'post', 
+          text: `You posted tuition for "${t.subject}"`, 
+          time: t.createdAt, 
+          icon: FileText, 
+          color: 'text-blue-500', 
+          bg: 'bg-blue-100' 
       })),
-      ...payments.map(p => ({
-        type: 'payment',
-        text: `Payment of ৳${p.amount} successful for ${p.tutorName}`,
-        time: p.date,
-        icon: DollarSign,
-        color: 'text-orange-500',
-        bg: 'bg-orange-100'
+      ...payments.map(p => ({ 
+          type: 'payment', 
+          text: `Payment of ৳${p.amount} successful for ${p.tutorName || 'a tutor'}`, 
+          time: p.date, 
+          icon: DollarSign, 
+          color: 'text-orange-500', 
+          bg: 'bg-orange-100' 
       })),
-      ...applications.map(a => ({
-        type: 'application',
-        text: `Tutor "${a.tutorName}" is shortlisted`,
-        time: a.createdAt,
-        icon: Users,
-        color: 'text-purple-500',
-        bg: 'bg-purple-100'
+      ...applications.filter(a => a.status === 'Shortlisted').map(a => ({ 
+          type: 'application', 
+          text: `Tutor "${a.tutorName || 'An applicant'}" is shortlisted for ${a.subject}`, 
+          time: a.createdAt, 
+          icon: Users, 
+          color: 'text-purple-500', 
+          bg: 'bg-purple-100' 
       }))
     ].sort((a, b) => new Date(b.time) - new Date(a.time)).slice(0, 5);
 
     return {
       stats: { totalPosted: tuitions.length, pending: pendingPosts, approved: approvedPosts, totalSpent },
-      recentPosts: tuitions.slice(0, 5),
+      recentPosts: tuitions.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 5),
       chartData,
       activityFeed: feed,
       pendingAppsCount
@@ -152,7 +155,7 @@ const StudentDashboardHome = () => {
   }, [tuitions, payments, applications, loadingTuitions, loadingPayments, loadingApps]);
 
 
-  // --- 4. Helper Functions ---
+  // --- Helper Functions ---
   const getStatusColor = (status) => {
     switch(status?.toLowerCase()) {
       case 'approved': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
@@ -176,21 +179,27 @@ const StudentDashboardHome = () => {
     return date.toLocaleDateString();
   };
 
-  // --- 5. Conditional Rendering ---
+  // --- Conditional Rendering ---
 
   if (loadingTuitions || loadingPayments || loadingApps) {
     return <Loading />;
   }
 
-  // Handle Errors (Check if any query failed)
-  if (errorTuitions || errorPayments || errorApps) {
+  if (errObjTuitions || errObjPayments || errObjApps) {
     const status = errObjTuitions?.response?.status || errObjPayments?.response?.status || errObjApps?.response?.status;
+    
     if (status === 401 || status === 403) return <Unauthorized />;
+    
     return <ServerDown />;
+  }
+  
+  if (!dashboardData) {
+      return <Loading />; 
   }
 
   const { stats, recentPosts, chartData, activityFeed, pendingAppsCount } = dashboardData;
 
+  // --- Render Component ---
   return (
     <div className="bg-gray-50 min-h-screen p-4 md:p-8 pt-24 md:pt-32 pb-12">
       
@@ -345,15 +354,15 @@ const StudentDashboardHome = () => {
               <Bell size={24} />
             </div>
             <div>
-              <h4 className="font-bold text-gray-800 text-lg">{pendingAppsCount} Tutors Shortlisted!</h4>
+              <h4 className="font-bold text-gray-800 text-lg">{pendingAppsCount} Tutors Waiting!</h4>
               <p className="text-sm text-gray-600">You have {pendingAppsCount} tutors waiting for your review or hire.</p>
             </div>
           </div>
           <button 
-            onClick={() => navigate('/dashboard/applied-tutors')}
+            onClick={() => navigate('/student-dashboard/applied-tutors')}
             className="w-full md:w-auto px-6 py-3 md:py-2 bg-white text-orange-600 font-semibold rounded-lg shadow-sm border border-orange-100 hover:bg-orange-50 transition-colors whitespace-nowrap text-center"
           >
-            View Now
+            View Applicants
           </button>
         </motion.div>
       )}
@@ -365,7 +374,7 @@ const StudentDashboardHome = () => {
           <div className="p-6 border-b border-gray-100 flex justify-between items-center">
             <h3 className="text-lg font-bold text-gray-800">Recent Tuition Posts</h3>
             <button 
-              onClick={() => navigate('/dashboard/my-tuitions')}
+              onClick={() => navigate('/student-dashboard/my-tuitions')}
               className="text-emerald-600 text-sm font-medium hover:underline"
             >
               View All

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
@@ -32,42 +32,64 @@ const PlatformSettings = () => {
     allowRegistration: true
   });
 
-  // --- 1. Fetch Settings (Query) ---
-  const fetchSettings = async () => {
-    // Get token for authentication if needed (optional based on your backend)
-    const storedUser = JSON.parse(localStorage.getItem("user"));
-    if (!storedUser?.email) throw new Error("Unauthorized");
+  // --- 1. JWT Retrieval and Auth Config ---
+  const { authConfig, isUserValid } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) return { authConfig: {}, isUserValid: false };
+    
+    const userData = JSON.parse(userStr);
+    
+    const authToken = userData.token || userData.jwtToken || 
+                      localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
 
-    const res = await axios.get(`${API_URL}/api/admin/settings`);
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+    
+    return { 
+        authConfig: config, 
+        isUserValid: !!authToken && userData?.role === 'admin' 
+    };
+  }, []);
+
+  // --- 2. Fetch Settings (Query - SECURED) ---
+  const fetchSettings = async () => {
+    if (!isUserValid) throw new Error("Unauthorized");
+    
+    const res = await axios.get(`${API_URL}/api/admin/settings`, authConfig);
     return res.data.data;
   };
 
   const { data: serverSettings, isLoading, isError, error } = useQuery({
     queryKey: ['platformSettings'],
     queryFn: fetchSettings,
+    enabled: isUserValid, 
     refetchOnWindowFocus: false,
+    retry: 1
   });
 
-  // --- 2. Sync Server Data to Local State ---
+  // --- 3. Sync Server Data to Local State ---
   useEffect(() => {
     if (serverSettings) {
       setSettings(prev => ({ ...prev, ...serverSettings }));
     }
   }, [serverSettings]);
 
-  // --- 3. Save Settings (Mutation) ---
+  // --- 4. Save Settings (Mutation - SECURED) ---
   const updateSettingsMutation = useMutation({
     mutationFn: async (newSettings) => {
-      return await axios.put(`${API_URL}/api/admin/settings`, newSettings);
+      return await axios.put(`${API_URL}/api/admin/settings`, newSettings, authConfig);
     },
     onSuccess: () => {
       setIsSaved(true);
-      queryClient.invalidateQueries(['platformSettings']); // Ensure data consistency
+      queryClient.invalidateQueries(['platformSettings']); 
       setTimeout(() => setIsSaved(false), 2000);
     },
     onError: (err) => {
       console.error("Save failed:", err);
-      alert("Failed to save settings. Please try again.");
+      alert(err.response?.data?.message || "Failed to save settings. Please try again.");
     }
   });
 
@@ -87,8 +109,8 @@ const PlatformSettings = () => {
   // --- Render States ---
   if (isLoading) return <Loading />;
 
-  if (isError) {
-    if (error.response?.status === 401 || error.response?.status === 403 || error.message === "Unauthorized") {
+  if (isError || !isUserValid) {
+    if (!isUserValid || error?.response?.status === 401 || error?.response?.status === 403 || error?.message === "Unauthorized") {
       return <Unauthorized />;
     }
     return <ServerDown />;

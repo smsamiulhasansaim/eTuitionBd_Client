@@ -10,28 +10,30 @@ import {
   CreditCard, Filter, FileText 
 } from 'lucide-react';
 
-// --- Custom Components ---
 import Loading from '../../../components/common/Loading';
 import ServerDown from '../../common/ServerDown';
 import Unauthorized from '../../common/Unauthorized';
 
-// --- Configuration ---
 const API_URL = import.meta.env.VITE_API_URL;
 
 const RevenueHistory = () => {
   const navigate = useNavigate();
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
-    const userStr = localStorage.getItem('user');
-    if (!userStr) {
-      navigate('/login');
-      return null;
+  // --- User and Token Retrieval ---
+  const { user, authToken } = useMemo(() => {
+    const userStr = localStorage.getItem('user') || localStorage.getItem('userInfo');
+    const user = userStr ? JSON.parse(userStr) : null;
+    
+    const token = user?.token || user?.jwtToken || localStorage.getItem('jwtToken') || localStorage.getItem('token');
+    
+    if (!user?._id || !token) {
+      return { user: null, authToken: null };
     }
-    return JSON.parse(userStr);
-  }, [navigate]);
-
-  // --- 2. Data Fetching (TanStack Query) ---
+    
+    return { user, authToken: token };
+  }, []);
+  
+  // Data Fetching with Authentication
   const { 
     data: revenueData, 
     isLoading, 
@@ -40,14 +42,37 @@ const RevenueHistory = () => {
   } = useQuery({
     queryKey: ['revenueStats', user?._id],
     queryFn: async () => {
-      if (!user?._id) return null;
-      const response = await axios.get(`${API_URL}/api/revenue/${user._id}`);
+      if (!user?._id || !authToken) {
+         throw new Error("Authentication context missing."); 
+      }
+      
+      const response = await axios.get(
+        `${API_URL}/api/revenue/${user._id}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${authToken}`, 
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
       return response.data;
     },
-    enabled: !!user?._id, // Only fetch if user ID exists
+    enabled: !!user?._id && !!authToken,
+    retry: 1,
+    onError: (err) => {
+      if (err.response?.status === 401 || err.response?.status === 403) {
+        localStorage.removeItem('user');
+        localStorage.removeItem('userInfo');
+        localStorage.removeItem('jwtToken');
+        localStorage.removeItem('token');
+        navigate('/login');
+      }
+    }
   });
 
-  // --- 3. Data Processing (Memoized) ---
+
+  // Data Processing
   const { stats, chartData, transactions } = useMemo(() => {
     if (!revenueData?.success) {
       return {
@@ -60,21 +85,23 @@ const RevenueHistory = () => {
     const { totalEarnings, thisMonthEarnings, pendingAmount, chartData, transactions } = revenueData.data;
     
     return {
-      stats: { totalEarnings, thisMonthEarnings, pendingAmount },
-      chartData: chartData || [],
+      stats: { 
+        totalEarnings: totalEarnings || 0, 
+        thisMonthEarnings: thisMonthEarnings || 0, 
+        pendingAmount: pendingAmount || 0 
+      },
+      chartData: chartData.map(d => ({ name: d.name, income: d.income || 0 })) || [],
       transactions: transactions || []
     };
   }, [revenueData]);
 
-  // --- 4. Helpers ---
   const getStatusBadge = (status) => {
     return status === 'Paid' 
       ? <span className="px-2 py-1 rounded text-xs font-bold bg-green-100 text-green-700">Success</span>
       : <span className="px-2 py-1 rounded text-xs font-bold bg-yellow-100 text-yellow-700">Processing</span>;
   };
 
-  // --- 5. Conditional Rendering ---
-  
+  if (!user || !authToken) return <Unauthorized />;
   if (isLoading) return <Loading />;
 
   if (isError) {
@@ -84,9 +111,9 @@ const RevenueHistory = () => {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in-up">
+    <div className="space-y-6 animate-fade-in-up p-4 md:p-8 pt-24 md:pt-32 pb-12">
       
-      {/* --- HEADER --- */}
+      {/* HEADER */}
       <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
@@ -101,10 +128,9 @@ const RevenueHistory = () => {
         </button>
       </div>
 
-      {/* --- STAT CARDS --- */}
+      {/* STAT CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         
-        {/* Total Earned */}
         <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-6 rounded-xl text-white shadow-lg relative overflow-hidden">
           <div className="relative z-10">
             <p className="text-emerald-100 text-sm font-medium mb-1">Total Lifetime Earnings</p>
@@ -115,7 +141,6 @@ const RevenueHistory = () => {
           </div>
         </div>
 
-        {/* This Month */}
         <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex justify-between items-start">
             <div>
@@ -131,7 +156,6 @@ const RevenueHistory = () => {
           </p>
         </div>
 
-        {/* Pending */}
         <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
           <div className="flex justify-between items-start">
             <div>
@@ -146,11 +170,11 @@ const RevenueHistory = () => {
         </div>
       </div>
 
-      {/* --- CHART SECTION --- */}
+      {/* CHART SECTION */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <h3 className="text-lg font-bold text-gray-800 mb-6">Income Growth</h3>
+        <h3 className="text-lg font-bold text-gray-800 mb-6">Income Growth (Last 6 Months)</h3>
         <div className="h-[300px] w-full">
-          {chartData.length > 0 ? (
+          {chartData.length > 0 && chartData.some(d => d.income > 0) ? (
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
                 <defs>
@@ -160,11 +184,16 @@ const RevenueHistory = () => {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 12}} dy={10} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 12}} />
+                <YAxis 
+                   tickFormatter={(value) => `৳${(value / 1000).toFixed(0)}k`} // Format Y axis ticks
+                   axisLine={false} 
+                   tickLine={false} 
+                   tick={{fill: '#9CA3AF', fontSize: 12}} 
+                />
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                 <Tooltip 
                   contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'}}
-                  formatter={(value) => [`৳ ${value}`, 'Income']}
+                  formatter={(value) => [`৳ ${value.toLocaleString()}`, 'Income']}
                 />
                 <Area 
                   type="monotone" 
@@ -178,13 +207,13 @@ const RevenueHistory = () => {
             </ResponsiveContainer>
           ) : (
              <div className="flex items-center justify-center h-full text-gray-400">
-               No data available for chart
+               No income data available for chart.
              </div>
           )}
         </div>
       </div>
 
-      {/* --- TRANSACTIONS TABLE --- */}
+      {/* TRANSACTIONS TABLE */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-6 border-b border-gray-100 flex justify-between items-center">
           <h3 className="text-lg font-bold text-gray-800">Recent Transactions</h3>
@@ -209,7 +238,7 @@ const RevenueHistory = () => {
               {transactions.length === 0 ? (
                  <tr>
                    <td colSpan="6" className="px-6 py-8 text-center text-gray-400">
-                     No transactions found.
+                     No recent transactions found.
                    </td>
                  </tr>
               ) : (
@@ -217,17 +246,17 @@ const RevenueHistory = () => {
                   <tr key={trx._id} className="hover:bg-gray-50/50 transition-colors">
                     <td className="px-6 py-4">
                       <p className="text-xs font-mono text-gray-500">{trx.transactionId || 'N/A'}</p>
-                      <p className="text-xs text-gray-400">bKash/Bank</p>
+                      <p className="text-xs text-gray-400">{trx.subject}</p>
                     </td>
                     <td className="px-6 py-4">
-                      <p className="text-sm font-semibold text-gray-800">{trx.studentName || 'Unknown'}</p>
+                      <p className="text-sm font-semibold text-gray-800">{trx.studentName}</p>
                       <p className="text-xs text-gray-500">{trx.subject}</p>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {new Date(trx.date).toLocaleDateString()}
                     </td>
-                    <td className="px-6 py-4 font-bold text-gray-800">৳ {trx.amount}</td>
-                    <td className="px-6 py-4">{getStatusBadge(trx.paymentStatus || 'Pending')}</td>
+                    <td className="px-6 py-4 font-bold text-gray-800">৳ {trx.amount.toLocaleString()}</td>
+                    <td className="px-6 py-4">{getStatusBadge(trx.paymentStatus)}</td>
                     <td className="px-6 py-4 text-right">
                       <button className="text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 p-2 rounded-lg transition-colors" title="Download Invoice">
                         <FileText size={18} />

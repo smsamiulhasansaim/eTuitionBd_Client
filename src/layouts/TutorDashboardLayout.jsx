@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Outlet, useLocation, Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
@@ -13,8 +13,65 @@ import {
 const API_URL = import.meta.env.VITE_API_URL;
 
 /**
+ * Custom Hook for Authentication and Token Management
+ */
+const useAuth = (navigate) => {
+  const { user, userId, token } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) {
+      navigate("/login");
+      return { user: null, userId: null, token: null };
+    }
+    const parsedUser = JSON.parse(userStr);
+    const id = parsedUser?._id || parsedUser?.id;
+    
+    return {
+        user: parsedUser, 
+        userId: id ? id.toString() : null,
+        token: parsedUser?.token 
+    };
+  }, [navigate]);
+
+  return { user, userId, token };
+};
+
+/**
+ * Sets up Axios Interceptors for centralized auth and error handling.
+ */
+const useAxiosInterceptors = (token, navigate) => {
+    useEffect(() => {
+        // Request Interceptor: Add Authorization token to all outgoing requests
+        const requestInterceptor = axios.interceptors.request.use(
+          (config) => {
+            if (token && !config.headers.Authorization) {
+              config.headers.Authorization = `Bearer ${token}`;
+            }
+            return config;
+          },
+          (error) => Promise.reject(error)
+        );
+    
+        // Response Interceptor: Handle 401/403 (Unauthorized/Forbidden)
+        const responseInterceptor = axios.interceptors.response.use(
+            (response) => response,
+            (error) => {
+                if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+                    console.error("Authentication Error: Session Expired/Unauthorized.");
+                    navigate("/login");
+                } 
+                return Promise.reject(error);
+            }
+        );
+    
+        return () => {
+          axios.interceptors.request.eject(requestInterceptor);
+          axios.interceptors.response.eject(responseInterceptor);
+        };
+      }, [token, navigate]);
+}
+
+/**
  * Sidebar Component
- * Separated to prevent re-renders of the entire layout when internal state changes.
  */
 const Sidebar = ({ menuItems, currentPath, onClose, onLogout }) => (
   <div className="h-full flex flex-col bg-white border-r border-gray-200">
@@ -48,7 +105,7 @@ const Sidebar = ({ menuItems, currentPath, onClose, onLogout }) => (
               {item.name}
             </div>
             {item.badge > 0 && (
-              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${isActive ? 'bg-emerald-200 text-emerald-800' : 'bg-gray-100 text-gray-600'}`}>
+              <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${isActive ? 'bg-emerald-200 text-emerald-800' : 'bg-red-500 text-white'}`}>
                 {item.badge}
               </span>
             )}
@@ -75,32 +132,35 @@ const TutorDashboardLayout = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
-    const userStr = localStorage.getItem("user");
-    return userStr ? JSON.parse(userStr) : null;
-  }, []);
+  // 1. Authentication Check & Token Retrieval
+  const { user, userId, token } = useAuth(navigate);
+  
+  // 2. Axios Interceptor Setup
+  useAxiosInterceptors(token, navigate);
 
-  // --- 2. Fetch Stats for Badges (TanStack Query) ---
+  // 3. Fetch Stats for Badges (TanStack Query)
   const { data: stats } = useQuery({
-    queryKey: ['layoutStats', user?._id],
+    queryKey: ['tutorLayoutStats'],
     queryFn: async () => {
-      if (!user?._id) return null;
-      const response = await axios.get(`${API_URL}/api/profile/dashboard-stats/${user._id}`);
+      if (!userId || !token) return Promise.reject(new Error("Authentication missing."));
+      
+      const response = await axios.get(`${API_URL}/api/profile/dashboard-stats`);
+      
       return response.data.data?.stats || {};
     },
-    enabled: !!user?._id, // Only fetch if user logged in
-    staleTime: 60000, // Cache for 1 minute
+    enabled: !!userId && !!token, 
+    staleTime: 60000, 
+    retry: 1
   });
 
-  // --- 3. Dynamic Menu Config ---
+  // 4. Dynamic Menu Configuration
   const menuItems = useMemo(() => [
     { path: '/tutor-dashboard', name: 'Dashboard Home', icon: LayoutDashboard },
     { 
       path: '/tutor-dashboard/my-applications', 
       name: 'My Applications', 
       icon: Send, 
-      badge: stats?.pendingReview || 0 // Dynamic Badge
+      badge: stats?.pendingReview || 0 
     }, 
     { path: '/tutor-dashboard/ongoing-tuitions', name: 'Ongoing Tuitions', icon: BookOpen },
     { path: '/tutor-dashboard/revenue', name: 'Revenue History', icon: DollarSign },
@@ -109,7 +169,7 @@ const TutorDashboardLayout = () => {
     { path: '/tutor-dashboard/reviews', name: 'Reviews & Ratings', icon: Star },
   ], [stats]);
 
-  // --- 4. Handlers ---
+  // 5. Handlers
   const handleLogout = () => {
     Swal.fire({
       title: 'Sign Out?',
@@ -121,9 +181,10 @@ const TutorDashboardLayout = () => {
       confirmButtonText: 'Yes, Sign Out'
     }).then((result) => {
       if (result.isConfirmed) {
+        // Clear all relevant tokens/user data
         localStorage.removeItem('user');
         localStorage.removeItem('token');
-        navigate('/login');
+        localStorage.removeItem('jwtToken');
         
         Swal.fire({
           icon: 'success',
@@ -132,6 +193,8 @@ const TutorDashboardLayout = () => {
           position: 'top-end',
           showConfirmButton: false,
           timer: 1500
+        }).then(() => {
+          navigate('/login'); 
         });
       }
     });
@@ -142,10 +205,15 @@ const TutorDashboardLayout = () => {
     return activeItem ? activeItem.name : 'Dashboard';
   };
 
+  // 6. Render Guard
+  if (!user) {
+    return null; // Redirect handled by useAuth hook
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex">
       
-      {/* --- Desktop Sidebar --- */}
+      {/* Desktop Sidebar */}
       <aside className="hidden lg:block w-64 fixed inset-y-0 left-0 z-50 bg-white shadow-sm">
         <Sidebar 
           menuItems={menuItems} 
@@ -155,7 +223,7 @@ const TutorDashboardLayout = () => {
         />
       </aside>
 
-      {/* --- Mobile Header --- */}
+      {/* Mobile Header */}
       <div className="lg:hidden fixed top-0 left-0 w-full bg-white z-40 border-b border-gray-200 px-4 py-3 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 bg-emerald-600 rounded flex items-center justify-center text-white font-bold text-sm">e</div>
@@ -166,7 +234,7 @@ const TutorDashboardLayout = () => {
         </button>
       </div>
 
-      {/* --- Mobile Drawer --- */}
+      {/* Mobile Drawer */}
       <AnimatePresence>
         {isSidebarOpen && (
           <>
@@ -198,7 +266,7 @@ const TutorDashboardLayout = () => {
         )}
       </AnimatePresence>
 
-      {/* --- Main Content Area --- */}
+      {/* Main Content Area */}
       <main className="flex-1 lg:ml-64 w-full min-h-screen p-4 lg:p-8 mt-14 lg:mt-0 transition-all">
          
          {/* Top Header (Desktop Only) */}

@@ -1,16 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
 import { 
-  MdSearch, 
-  MdDownload, 
-  MdFilterList, 
-  MdReceipt,
-  MdCheckCircle, 
-  MdCancel, 
-  MdPending,
-  MdClose,
-  MdDateRange
+  MdSearch, MdDownload, MdFilterList, MdReceipt,
+  MdCheckCircle, MdCancel, MdPending, MdClose, MdDateRange
 } from 'react-icons/md';
 
 // Import Custom Components
@@ -27,35 +20,60 @@ const Transactions = () => {
   const [statusFilter, setStatusFilter] = useState("All"); 
   const [viewReceipt, setViewReceipt] = useState(null); 
 
-  // --- 1. Fetch Transactions (Query) ---
-  const fetchTransactions = async () => {
-    // Optional: Check for local authentication token/user existence
-    const storedUser = localStorage.getItem("user");
-    if (!storedUser) throw new Error("Unauthorized");
+  // --- 1. JWT Retrieval and Auth Config ---
+  const { authConfig, isUserValid } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) return { authConfig: {}, isUserValid: false };
+    
+    const userData = JSON.parse(userStr);
+    
+    const authToken = userData.token || userData.jwtToken || 
+                      localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
 
-    const res = await axios.get(`${API_URL}/api/admin/transactions`);
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+    
+    return { 
+        authConfig: config, 
+        isUserValid: !!authToken && userData?.role === 'admin' 
+    };
+  }, []);
+
+
+  // --- 2. Fetch Transactions (Query - SECURED) ---
+  const fetchTransactions = async () => {
+    if (!isUserValid) throw new Error("Unauthorized");
+    
+    const res = await axios.get(`${API_URL}/api/admin/transactions`, authConfig);
     return res.data.data;
   };
 
   const { data: transactions = [], isLoading, isError, error } = useQuery({
     queryKey: ['transactions'],
     queryFn: fetchTransactions,
+    enabled: isUserValid, 
     refetchOnWindowFocus: false,
-    staleTime: 1000 * 60 * 2, // Cache data for 2 minutes
+    staleTime: 1000 * 60 * 2, 
+    retry: 1
   });
 
-  // --- 2. Filter Logic ---
-  const filteredTransactions = transactions.filter(txn => {
-    const matchesSearch = 
-      (txn.id && txn.id.toLowerCase().includes(searchTerm.toLowerCase())) || 
-      (txn.user && txn.user.toLowerCase().includes(searchTerm.toLowerCase()));
-    
-    const matchesStatus = statusFilter === "All" || txn.status === statusFilter;
+  // --- 3. Filter Logic ---
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter(txn => {
+      const matchesSearch = 
+        (txn.id && txn.id.toLowerCase().includes(searchTerm.toLowerCase())) || 
+        (txn.user && txn.user.toLowerCase().includes(searchTerm.toLowerCase()));
+      
+      const matchesStatus = statusFilter === "All" || txn.status === statusFilter;
 
-    return matchesSearch && matchesStatus;
-  });
+      return matchesSearch && matchesStatus;
+    });
+  }, [transactions, searchTerm, statusFilter]);
 
-  // --- 3. Export CSV Function ---
+  // --- 4. Export CSV Function ---
   const downloadCSV = () => {
     if (filteredTransactions.length === 0) {
       alert("No data available to export.");
@@ -90,19 +108,16 @@ const Transactions = () => {
   // --- Render States ---
   if (isLoading) return <Loading />;
 
-  if (isError) {
-    // Handle Unauthorized Access (401/403)
-    if (error.response?.status === 401 || error.response?.status === 403 || error.message === "Unauthorized") {
+  if (isError || !isUserValid) {
+    if (!isUserValid || error?.response?.status === 401 || error?.response?.status === 403 || error?.message === "Unauthorized") {
       return <Unauthorized />;
     }
-    // Handle Server Errors
-    console.error("Transactions Fetch Error:", error);
     return <ServerDown />;
   }
 
   // --- Main UI ---
   return (
-    <div className="space-y-6 animate-fade-in-up">
+    <div className="space-y-6 animate-fade-in-up p-4 md:p-8">
       
       {/* Header Section */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -245,7 +260,7 @@ const Transactions = () => {
               <div className="text-center mb-6">
                  <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Total Amount</p>
                  <h2 className="text-3xl font-extrabold text-indigo-600">
-                   {viewReceipt.amount ? viewReceipt.amount.toLocaleString() : 0} BDT
+                   ৳{viewReceipt.amount ? viewReceipt.amount.toLocaleString() : 0} 
                  </h2>
                  <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold mt-2 ${getStatusBadge(viewReceipt.status)}`}>
                    {viewReceipt.status === 'Success' && <MdCheckCircle />}

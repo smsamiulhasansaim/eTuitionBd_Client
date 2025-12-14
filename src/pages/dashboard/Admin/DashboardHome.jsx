@@ -1,15 +1,10 @@
 import React from 'react';
 import axios from 'axios';
 import { useQuery } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { 
-  MdAttachMoney, 
-  MdPeople, 
-  MdSchool, 
-  MdClass, 
-  MdTrendingUp, 
-  MdPending,
-  MdMoreVert,
-  MdCheckCircle
+  MdAttachMoney, MdPeople, MdSchool, MdClass, MdTrendingUp, 
+  MdPending, MdMoreVert, MdCheckCircle
 } from 'react-icons/md';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -23,31 +18,84 @@ import ServerDown from '../../common/ServerDown';
 // API Configuration
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
+// Helper Component
+const StatsCard = ({ title, count, icon, color, trend }) => (
+  <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+    <div className="flex justify-between items-start">
+      <div>
+        <p className="text-gray-500 text-sm font-medium">{title}</p>
+        <h3 className="text-2xl font-bold text-gray-800 mt-1">{count}</h3>
+      </div>
+      <div className={`p-3 rounded-xl ${color}`}>
+        {icon}
+      </div>
+    </div>
+    <div className="mt-4 flex items-center text-xs">
+      <span className="text-green-500 font-bold flex items-center gap-1">
+        <MdTrendingUp /> {trend}
+      </span>
+      <span className="text-gray-400 ml-2">Currently</span>
+    </div>
+  </div>
+);
+
 const DashboardHome = () => {
 
-  // --- 1. Fetch Dashboard Data ---
+  // --- 1. Get Auth Config ---
+  const { authConfig } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) return { authConfig: {} };
+    
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem("adminToken") || localStorage.getItem("jwtToken"); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+    return { authConfig: config };
+  }, []);
+
+
+  // --- 2. Fetch Dashboard Data (SECURED) ---
   const fetchDashboardData = async () => {
-    // API call to fetch stats
-    const res = await axios.get(`${API_URL}/api/admin/dashboard-stats`);
-    return res.data.data;
+    try {
+      const res = await axios.get(`${API_URL}/api/admin/dashboard-stats`, authConfig);
+      return res.data.data;
+    } catch (error) {
+      throw error;
+    }
   };
 
   const { data: dashboardData, isLoading, isError, error } = useQuery({
     queryKey: ['adminDashboard'],
     queryFn: fetchDashboardData,
-    refetchOnWindowFocus: false, // Prevent refetching on window focus
-    staleTime: 1000 * 60 * 5, // Cache data for 5 minutes
+    enabled: !!authConfig.headers?.Authorization,
+    refetchOnWindowFocus: false, 
+    staleTime: 1000 * 60 * 5, 
+    retry: false,
   });
 
-  // --- 2. State Handling ---
+  // --- 3. State Handling ---
   if (isLoading) return <Loading />;
+  
   if (isError) {
-    console.error("Dashboard Error:", error);
+    const status = error.response?.status;
+    
+    if (status === 401 || status === 403) {
+      return (
+        <div className="text-center py-20">
+          <h2 className="text-xl font-bold text-red-600">Session Error</h2>
+          <p className="text-gray-600 mt-2">Authentication failed. Please log in again.</p>
+        </div>
+      );
+    }
+    
     return <ServerDown />;
   }
 
-  // --- 3. Destructuring with Fallbacks ---
-  // (Prevents crash if API returns partial data)
+  // --- 4. Destructuring with Fallbacks ---
   const { 
     totalEarnings = 0, 
     todaysEarnings = 0, 
@@ -187,7 +235,7 @@ const DashboardHome = () => {
             </ResponsiveContainer>
           </div>
         </div>
-
+        
         {/* User Growth Chart */}
         <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
           <div className="flex justify-between items-center mb-6">
@@ -200,11 +248,18 @@ const DashboardHome = () => {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={userGrowthData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} dy={10} />
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{fontSize: 10, fill: '#9CA3AF'}} 
+                  dy={10} 
+                  interval="preserveStart"
+                />
                 <YAxis axisLine={false} tickLine={false} tick={{fontSize: 12, fill: '#9CA3AF'}} />
                 <Tooltip 
-                   cursor={{fill: '#F3F4F6'}}
-                   contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} 
+                    cursor={{fill: '#F3F4F6'}}
+                    contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} 
                 />
                 <Legend iconType="circle" wrapperStyle={{paddingTop: '20px'}} />
                 <Bar dataKey="students" name="Students" fill="#818CF8" radius={[4, 4, 0, 0]} barSize={20} />
@@ -213,7 +268,7 @@ const DashboardHome = () => {
             </ResponsiveContainer>
           </div>
         </div>
-      </div>
+              </div>
 
       {/* 5. Recent Payments Table */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -276,26 +331,5 @@ const DashboardHome = () => {
     </div>
   );
 };
-
-// Helper Component (Same as before)
-const StatsCard = ({ title, count, icon, color, trend }) => (
-  <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
-    <div className="flex justify-between items-start">
-      <div>
-        <p className="text-gray-500 text-sm font-medium">{title}</p>
-        <h3 className="text-2xl font-bold text-gray-800 mt-1">{count}</h3>
-      </div>
-      <div className={`p-3 rounded-xl ${color}`}>
-        {icon}
-      </div>
-    </div>
-    <div className="mt-4 flex items-center text-xs">
-      <span className="text-green-500 font-bold flex items-center gap-1">
-        <MdTrendingUp /> {trend}
-      </span>
-      <span className="text-gray-400 ml-2">Currently</span>
-    </div>
-  </div>
-);
 
 export default DashboardHome;

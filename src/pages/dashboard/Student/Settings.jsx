@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { 
@@ -24,7 +24,6 @@ const Settings = () => {
   // --- Local State ---
   const [showPassword, setShowPassword] = useState(false);
   
-  // Profile Form State
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -34,22 +33,43 @@ const Settings = () => {
     image: ''
   });
 
-  // Password Form State
   const [securityData, setSecurityData] = useState({
     current: '',
     new: '',
     confirm: ''
   });
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  // --- 1. User Authentication Check & Token Retrieval ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
     const userStr = localStorage.getItem("user");
     if (!userStr) {
-      navigate("/login");
-      return null;
+      return { user: null, authConfig: {}, isUserValid: false };
     }
-    return JSON.parse(userStr);
-  }, [navigate]);
+    
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem("jwtToken"); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config,
+        isUserValid: !!userData.email && !!authToken
+    };
+  }, []);
+
+  // --- Redirect if not logged in (Side Effect) ---
+  useEffect(() => {
+    if (!isUserValid) {
+      const timer = setTimeout(() => navigate('/login'), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [isUserValid, navigate]);
+
 
   // --- 2. Data Fetching (TanStack Query) ---
   const { 
@@ -60,11 +80,15 @@ const Settings = () => {
   } = useQuery({
     queryKey: ['userProfile', user?.email],
     queryFn: async () => {
-      if (!user?.email) return null;
-      const response = await axios.get(`${API_URL}/api/users/profile?email=${user.email}`);
+      if (!isUserValid) return null;
+      
+      const emailQuery = user.email ? `?email=${user.email}` : '';
+
+      const response = await axios.get(`${API_URL}/api/users/profile${emailQuery}`, authConfig);
       return response.data.data;
     },
-    enabled: !!user?.email,
+    enabled: isUserValid,
+    retry: 1
   });
 
   // --- 3. Sync Data to Form ---
@@ -86,10 +110,12 @@ const Settings = () => {
   // Mutation A: Update Profile Info
   const profileMutation = useMutation({
     mutationFn: async (data) => {
-      const response = await axios.put(`${API_URL}/api/users/update-profile`, data);
+      const payload = { ...data, email: user.email }; 
+      
+      const response = await axios.put(`${API_URL}/api/users/profile`, payload, authConfig);
       return response.data;
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       // Update Local Storage for immediate UI reflection in Navbar/Sidebar
       const currentUser = JSON.parse(localStorage.getItem("user"));
       localStorage.setItem("user", JSON.stringify({ ...currentUser, name: formData.name }));
@@ -101,12 +127,17 @@ const Settings = () => {
   // Mutation B: Change Password
   const passwordMutation = useMutation({
     mutationFn: async (data) => {
-      const response = await axios.put(`${API_URL}/api/users/change-password`, {
-        email: formData.email,
+      const payload = { 
+        email: user.email, 
         currentPassword: data.current,
         newPassword: data.new
-      });
+      };
+
+      const response = await axios.put(`${API_URL}/api/users/change-password`, payload, authConfig);
       return response.data;
+    },
+    onSuccess: () => {
+        setSecurityData({ current: '', new: '', confirm: '' });
     }
   });
 
@@ -123,7 +154,6 @@ const Settings = () => {
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
-      // Basic size validation (e.g., max 2MB)
       if (file.size > 2 * 1024 * 1024) {
         Swal.fire('Error', 'Image size must be less than 2MB', 'error');
         return;
@@ -140,12 +170,18 @@ const Settings = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    if (!isUserValid) return;
+
     try {
       // Step 1: Update Profile
       await profileMutation.mutateAsync(formData);
 
       // Step 2: Change Password (Conditional)
-      if (securityData.current && securityData.new) {
+      if (securityData.current || securityData.new || securityData.confirm) {
+        if (!securityData.current || !securityData.new || !securityData.confirm) {
+            Swal.fire('Warning', 'To change password, all password fields (Current, New, Confirm) must be filled.', 'warning');
+            return;
+        }
         if (securityData.new !== securityData.confirm) {
           Swal.fire('Error', 'New password and confirm password do not match!', 'error');
           return;
@@ -162,15 +198,11 @@ const Settings = () => {
         showConfirmButton: false
       });
 
-      // Clear password fields
-      setSecurityData({ current: '', new: '', confirm: '' });
-
     } catch (err) {
-      console.error(err);
       Swal.fire({
         icon: 'error',
         title: 'Update Failed',
-        text: err.response?.data?.message || err.message || 'Something went wrong.',
+        text: err.response?.data?.message || 'Something went wrong.',
       });
     }
   };
@@ -179,8 +211,8 @@ const Settings = () => {
 
   if (isLoading) return <Loading />;
 
-  if (isError) {
-    const status = error.response?.status;
+  if (!user || isError) {
+    const status = error?.response?.status;
     if (status === 401 || status === 403) return <Unauthorized />;
     return <ServerDown />;
   }

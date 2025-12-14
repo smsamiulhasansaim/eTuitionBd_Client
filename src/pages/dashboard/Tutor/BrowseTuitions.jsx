@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { 
   Search, MapPin, BookOpen, DollarSign, Clock, Filter, 
-  X, CheckCircle, Briefcase, User, Mail, Phone 
+  X, CheckCircle, Briefcase, User, Mail, Phone, Globe
 } from 'lucide-react';
 
 // --- Custom Components ---
@@ -34,10 +34,13 @@ const BrowseTuitions = () => {
   });
 
   // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  const { user, token } = useMemo(() => {
     const storedUser = localStorage.getItem('user');
-    return storedUser ? JSON.parse(storedUser) : null;
+    const storedToken = localStorage.getItem('token');
+    return { user: storedUser ? JSON.parse(storedUser) : null, token: storedToken };
   }, []);
+  
+  const isTutor = user?.role === 'tutor';
 
   // --- 2. Data Fetching (Parallel Queries) ---
 
@@ -50,29 +53,33 @@ const BrowseTuitions = () => {
     queryKey: ['browseTuitions'],
     queryFn: async () => {
       const response = await axios.get(`${API_URL}/api/tuitions/all`);
-      // Filter only approved tuitions on the client side (or backend if supported)
       return response.data.data.filter(item => item.status === 'approved');
     },
     refetchOnWindowFocus: false,
+    retry: 1
   });
 
-  // Query B: Fetch User's Existing Applications (To check what they already applied to)
+  // Query B: Fetch User's Existing Applications
   const { data: myApplications = [] } = useQuery({
     queryKey: ['myApplications', user?.email],
     queryFn: async () => {
-      if (!user?.email) return [];
-      // Assuming backend supports filtering by tutorEmail or returning all for user
-      const response = await axios.get(`${API_URL}/api/applications/my-applications?tutorName=${encodeURIComponent(user.name)}`);
+      if (!isTutor || !token) return [];
+      
+      const response = await axios.get(`${API_URL}/api/applications/my-applications`, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+      });
       return response.data.data;
     },
-    enabled: !!user, // Only fetch if user is logged in
+    enabled: isTutor && !!token,
+    retry: 1
   });
 
   // Computed: List of Tuition IDs the user has already applied for
   const appliedTuitionIds = useMemo(() => {
-    return myApplications.map(app => 
-      typeof app.tuitionId === 'object' ? app.tuitionId._id : app.tuitionId
-    );
+    return myApplications.map(app => app.tuitionId);
   }, [myApplications]);
 
   // --- 3. Optimized Filtering (useMemo) ---
@@ -98,19 +105,22 @@ const BrowseTuitions = () => {
     return result;
   }, [searchText, locationFilter, classFilter, tuitions]);
 
-  const uniqueClasses = useMemo(() => [...new Set(tuitions.map(item => item.class))], [tuitions]);
-
+  const uniqueClasses = useMemo(() => [...new Set(tuitions.map(item => item.class))].filter(Boolean), [tuitions]);
+  
   // --- 4. Apply Mutation ---
   const applyMutation = useMutation({
     mutationFn: async (payload) => {
-      const response = await axios.post(`${API_URL}/api/applications/apply`, payload);
+      const response = await axios.post(`${API_URL}/api/applications/apply`, payload, {
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+        }
+      });
       return response.data;
     },
     onSuccess: () => {
-      // 1. Refresh "My Applications" list so the UI updates "Apply Now" -> "Applied"
       queryClient.invalidateQueries(['myApplications']);
       
-      // 2. Show Success Feedback
       Swal.fire({
         icon: 'success',
         title: 'Application Sent!',
@@ -119,7 +129,6 @@ const BrowseTuitions = () => {
         showConfirmButton: false
       });
 
-      // 3. Reset Modal
       setSelectedJob(null);
       setApplyForm({ expectedSalary: '', message: '', experience: '' });
     },
@@ -144,6 +153,11 @@ const BrowseTuitions = () => {
       return;
     }
     
+    if (!isTutor) {
+        Swal.fire('Access Denied', 'Only registered Tutors can apply for jobs.', 'error');
+        return;
+    }
+
     if (appliedTuitionIds.includes(job._id)) {
       Swal.fire('Already Applied', 'You have already applied for this tuition.', 'info');
       return;
@@ -154,18 +168,24 @@ const BrowseTuitions = () => {
 
   const handleSubmitApplication = (e) => {
     e.preventDefault();
-    if (!selectedJob || !user) return;
+    if (!selectedJob || !user || !isTutor) return;
 
     const payload = {
       tuitionId: selectedJob._id,
       tuitionTitle: `${selectedJob.subject} for ${selectedJob.class}`,
+      tutorId: user.userId || user._id,
       tutorName: user.name,
       tutorEmail: user.email,
-      tutorPhone: user.phone || "Not Provided",
+      tutorPhone: user.phone || "N/A",
       expectedSalary: applyForm.expectedSalary,
       message: applyForm.message,
       experience: applyForm.experience
     };
+    
+    if (!payload.expectedSalary || !payload.message || isNaN(payload.expectedSalary)) {
+        Swal.fire('Missing Fields', 'Please fill in the expected salary and cover note.', 'warning');
+        return;
+    }
 
     applyMutation.mutate(payload);
   };
@@ -191,7 +211,7 @@ const BrowseTuitions = () => {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
               <input 
                 type="text" 
-                placeholder="Search by subject..." 
+                placeholder="Search by subject or requirements..." 
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
                 className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
@@ -255,12 +275,16 @@ const BrowseTuitions = () => {
                         <h3 className="text-lg font-bold text-gray-800 leading-tight group-hover:text-emerald-700 transition-colors">
                           {job.subject}
                         </h3>
-                        <p className="text-sm text-gray-500 mt-1 font-medium">{job.class}</p>
+                        <p className="text-sm text-gray-500 mt-1 font-medium">Class: {job.class}</p>
                       </div>
                       <span className="text-xs text-gray-400 flex items-center gap-1 bg-gray-50 px-2 py-1 rounded border border-gray-100 shrink-0">
                         <Clock size={12} /> {new Date(job.createdAt).toLocaleDateString()}
                       </span>
                     </div>
+                    
+                    {/* Requirements/Details */}
+                    <p className="text-sm text-gray-600 mb-4 line-clamp-2">{job.requirements || 'No specific requirements listed.'}</p>
+
 
                     <div className="space-y-3 mb-6">
                       <div className="flex items-start gap-3 text-sm text-gray-600">
@@ -281,16 +305,21 @@ const BrowseTuitions = () => {
                     </div>
                   </div>
 
+                  {/* Apply Button Logic */}
                   <button 
-                    onClick={() => !isApplied && handleApplyClick(job)}
-                    disabled={isApplied}
+                    onClick={() => handleApplyClick(job)}
+                    disabled={!isTutor || isApplied || applyMutation.isPending}
                     className={`w-full py-3 rounded-xl font-bold flex items-center justify-center gap-2 transition-all duration-200
-                      ${isApplied 
+                      ${!isTutor 
+                        ? "bg-gray-100 text-gray-400 cursor-not-allowed border-2 border-gray-100" 
+                        : isApplied
                         ? "bg-gray-100 text-gray-400 cursor-not-allowed border-2 border-gray-100" 
                         : "border-2 border-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white hover:border-emerald-600"
                       }`}
                   >
-                    {isApplied ? (
+                    {!isTutor ? (
+                        <> <Globe size={18} /> Tutor Access Required </>
+                    ) : isApplied ? (
                       <>
                         <CheckCircle size={18} /> Applied
                       </>
@@ -339,7 +368,7 @@ const BrowseTuitions = () => {
                   
                   {/* Auto-filled User Info */}
                   <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100 space-y-2">
-                      <p className="text-xs font-bold text-emerald-600 uppercase tracking-wide mb-2">Applicant Details</p>
+                      <p className="text-xs font-bold text-emerald-600 uppercase tracking-wide mb-2">Applicant Details (From your Profile)</p>
                       <div className="flex items-center gap-2 text-sm text-gray-700">
                         <User size={16} className="text-emerald-500"/> 
                         <span className="font-semibold">{user?.name}</span>
@@ -358,12 +387,13 @@ const BrowseTuitions = () => {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-2">Expected Salary</label>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Expected Salary (BDT/Month)</label>
                       <div className="relative">
                         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 font-bold">৳</span>
                         <input 
                           type="number" 
                           required
+                          min="100"
                           placeholder="5000"
                           className="w-full pl-8 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all"
                           value={applyForm.expectedSalary}
@@ -372,7 +402,7 @@ const BrowseTuitions = () => {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-sm font-semibold text-gray-700 mb-2">Experience</label>
+                      <label className="block text-sm font-semibold text-gray-700 mb-2">Experience (e.g., 2 Years)</label>
                       <input 
                         type="text" 
                         placeholder="e.g. 2 Years"
@@ -384,7 +414,7 @@ const BrowseTuitions = () => {
                   </div>
 
                   <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-2">Cover Note / Why hire you?</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-2">Cover Note / Why hire you? (Required)</label>
                     <textarea 
                       rows="4"
                       required

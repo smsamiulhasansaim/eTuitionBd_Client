@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
@@ -17,11 +17,69 @@ import Unauthorized from '../../common/Unauthorized';
 // --- Configuration ---
 const API_URL = import.meta.env.VITE_API_URL;
 
+// --- Custom Hooks ---
+const useAuth = (navigate) => {
+  const { user, userId, token } = useMemo(() => {
+    const userStr = localStorage.getItem("user");
+    if (!userStr) {
+      navigate("/login");
+      return { user: null, userId: null, token: null };
+    }
+    const parsedUser = JSON.parse(userStr);
+    
+    const id = parsedUser?._id || parsedUser?.id;
+    
+    return {
+        user: parsedUser, 
+        userId: id ? id.toString() : null,
+        token: parsedUser?.token 
+    };
+  }, [navigate]);
+
+  return { user, userId, token };
+};
+
+const useAxiosInterceptors = (token, navigate) => {
+    useEffect(() => {
+        const requestInterceptor = axios.interceptors.request.use(
+          (config) => {
+            if (token && !config.headers.Authorization) {
+              config.headers.Authorization = `Bearer ${token}`;
+            }
+            return config;
+          },
+          (error) => Promise.reject(error)
+        );
+    
+        const responseInterceptor = axios.interceptors.response.use(
+            (response) => response,
+            (error) => {
+                if (error.response) {
+                    if (error.response.status === 401 || error.response.status === 403) {
+                        console.error("Authentication Error: Session Expired/Unauthorized.");
+                        navigate("/login");
+                    } else if (error.response.status === 500) {
+                         console.error("Server Side Error 500:", error.response.data || "Unknown 500 error.");
+                    }
+                } else if (error.message.includes("Network Error")) {
+                     console.error("Network Error: Backend may be down.");
+                }
+                return Promise.reject(error);
+            }
+        );
+    
+        return () => {
+          axios.interceptors.request.eject(requestInterceptor);
+          axios.interceptors.response.eject(responseInterceptor);
+        };
+      }, [token, navigate]);
+}
+
+// --- Main Component ---
 const Profile = () => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // --- Local State ---
   const [isEditing, setIsEditing] = useState(false);
   const [profile, setProfile] = useState({
     name: '', email: '', title: '', phone: '', address: '', bio: '',
@@ -31,19 +89,9 @@ const Profile = () => {
     availability: '', image: '', coverPhoto: '', themeColor: '#10b981'
   });
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
-    const userStr = localStorage.getItem("user");
-    if (!userStr) {
-      navigate("/login");
-      return null;
-    }
-    return JSON.parse(userStr);
-  }, [navigate]);
+  const { user, userId, token } = useAuth(navigate);
+  useAxiosInterceptors(token, navigate);
 
-  const userId = user?._id || user?.id;
-
-  // --- 2. Data Fetching (TanStack Query) ---
   const { 
     data: fetchedProfile, 
     isLoading, 
@@ -52,26 +100,33 @@ const Profile = () => {
   } = useQuery({
     queryKey: ['tutorProfile', userId],
     queryFn: async () => {
-      if (!userId) return null;
-      const response = await axios.get(`${API_URL}/api/profile/my-profile/${userId}`);
+      if (!userId || !token) { 
+        return Promise.reject(new Error("Authentication token is missing."));
+      }
+      
+      const response = await axios.get(`${API_URL}/api/profile/my-profile`); 
       return response.data;
     },
-    enabled: !!userId,
+    enabled: !!userId && !!token,
+    retry: 1, 
   });
 
-  // --- 3. Sync Data to Local State ---
+  // Sync Data to Local State (Includes fix for phone/image persistence)
   useEffect(() => {
     if (fetchedProfile?.success && fetchedProfile.data) {
       const backendData = fetchedProfile.data;
       setProfile(prev => ({
         ...prev,
         ...backendData,
+        // FIX: Ensure name, email, phone, and image are prioritized from the populated user object
         name: backendData.user?.name || prev.name,
         email: backendData.user?.email || prev.email,
+        phone: backendData.user?.phone || backendData.phone || prev.phone,
+        image: backendData.user?.image || backendData.image || prev.image,
+        // End FIX
         themeColor: backendData.themeColor || '#10b981'
       }));
     } else if (user) {
-      // If no profile exists yet, pre-fill with basic user info
       setProfile(prev => ({
         ...prev,
         name: user.name || "",
@@ -80,10 +135,11 @@ const Profile = () => {
     }
   }, [fetchedProfile, user]);
 
-  // --- 4. Mutation: Update Profile ---
   const updateMutation = useMutation({
     mutationFn: async (updatedData) => {
-      const response = await axios.put(`${API_URL}/api/profile/update/${userId}`, updatedData);
+      if (!token) throw new Error("Authentication failed. Please log in again.");
+      
+      const response = await axios.put(`${API_URL}/api/profile/update`, updatedData); 
       return response.data;
     },
     onSuccess: (data) => {
@@ -106,11 +162,10 @@ const Profile = () => {
     }
   });
 
-  // --- 5. Handlers ---
-  const handleChange = (e) => {
+  const handleChange = useCallback((e) => {
     const { name, value } = e.target;
-    setProfile({ ...profile, [name]: value });
-  };
+    setProfile(prev => ({ ...prev, [name]: value }));
+  }, []);
 
   const handleImageUpload = (e, fieldName) => {
     const file = e.target.files[0];
@@ -135,14 +190,13 @@ const Profile = () => {
     updateMutation.mutate(profile);
   };
 
-  // --- 6. Render Logic ---
   if (isLoading) return <Loading />;
   
   if (isError) {
     const status = error.response?.status;
-    if (status === 401 || status === 403) return <Unauthorized />;
-    // Only show ServerDown if it's strictly a fetch error, otherwise assume initial creation
-    if (error.response?.status !== 404) return <ServerDown />;
+    if (status === 401 || status === 403 || error.message?.includes("Authentication token is missing")) return <Unauthorized />;
+    
+    if (status !== 404) return <ServerDown />;
   }
 
   return (
@@ -355,7 +409,7 @@ const Profile = () => {
             {/* --- RIGHT COLUMN --- */}
             <div className="lg:col-span-2 space-y-8">
               <div className="bg-white">
-                <h3 className="text-xl font-bold mb-5 flex items-center gap-2 border-b pb-2" style={{ color: profile.themeColor }}>
+                <h3 className="text-xl font-bold mb-5 flex items-center gap-2" style={{ color: profile.themeColor }}>
                   <GraduationCap size={24} /> Education
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

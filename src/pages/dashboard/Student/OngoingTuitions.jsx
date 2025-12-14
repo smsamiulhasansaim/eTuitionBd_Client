@@ -4,8 +4,8 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import { 
-  BookOpen, Calendar, Clock, CheckCircle, 
-  Edit3, Save, Smile, Star, Heart, Coffee 
+  Calendar, Clock, CheckCircle, 
+  Edit3, Save, Star, Heart, Coffee 
 } from 'lucide-react';
 
 // --- Custom Components ---
@@ -21,20 +21,33 @@ const OngoingTuitions = () => {
   const queryClient = useQueryClient();
 
   // --- Local UI State ---
-  // We only keep state for the Note Modal as it requires user input
   const [noteModal, setNoteModal] = useState({ isOpen: false, tuitionId: null, note: '' });
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  // --- Auth Setup ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
     const userStr = localStorage.getItem('user');
     if (!userStr) {
       navigate('/login');
-      return null;
+      return { user: null, authConfig: {}, isUserValid: false };
     }
-    return JSON.parse(userStr);
+    
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem('jwtToken'); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config, 
+        isUserValid: !!userData.email && !!authToken
+    };
   }, [navigate]);
 
-  // --- 2. Data Fetching (TanStack Query) ---
+  // --- Data Fetching (TanStack Query) ---
   const { 
     data: tuitions = [], 
     isLoading, 
@@ -43,8 +56,9 @@ const OngoingTuitions = () => {
   } = useQuery({
     queryKey: ['ongoingTuitions', user?.email],
     queryFn: async () => {
-      if (!user?.email) return [];
-      const response = await axios.get(`${API_URL}/api/ongoing-tuitions/student/ongoing?studentEmail=${user.email}`);
+      if (!isUserValid) return [];
+      
+      const response = await axios.get(`${API_URL}/api/ongoing-tuitions/student/ongoing`, authConfig);
       
       // Map API response to handle 'studentNote' consistency
       return response.data.data.map(t => ({
@@ -52,13 +66,14 @@ const OngoingTuitions = () => {
         myNote: t.studentNote || '' 
       }));
     },
-    enabled: !!user?.email,
+    enabled: isUserValid,
+    retry: 1
   });
 
-  // --- 3. Mutation: Save Note ---
+  // --- Mutation: Save Note ---
   const saveNoteMutation = useMutation({
     mutationFn: async ({ id, note }) => {
-      await axios.patch(`${API_URL}/api/ongoing-tuitions/${id}/student-note`, { note });
+      await axios.patch(`${API_URL}/api/ongoing-tuitions/${id}/student-note`, { note }, authConfig);
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['ongoingTuitions']);
@@ -74,33 +89,31 @@ const OngoingTuitions = () => {
         timerProgressBar: true
       });
     },
-    onError: (err) => {
-      console.error(err);
+    onError: () => {
       Swal.fire('Error', 'Failed to save note.', 'error');
     }
   });
 
-  // --- 4. Mutation: Complete Tuition ---
+  // --- Mutation: Complete Tuition ---
   const completeMutation = useMutation({
     mutationFn: async (id) => {
-      await axios.put(`${API_URL}/api/ongoing-tuitions/${id}/complete`);
+      await axios.put(`${API_URL}/api/ongoing-tuitions/${id}/complete`, {}, authConfig);
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['ongoingTuitions']);
       Swal.fire({
-        title: 'Course Completed! 🎉',
+        title: 'Course Completed! 🎊',
         text: 'Great job on finishing this tuition!',
         icon: 'success',
         confirmButtonColor: '#10B981'
       });
     },
-    onError: (err) => {
-      console.error(err);
+    onError: () => {
       Swal.fire('Error', 'Failed to update status.', 'error');
     }
   });
 
-  // --- 5. Handlers ---
+  // --- Handlers ---
   
   const handleCompleteClick = (id, subject) => {
     Swal.fire({
@@ -110,7 +123,7 @@ const OngoingTuitions = () => {
       showCancelButton: true,
       confirmButtonColor: '#10B981',
       cancelButtonColor: '#d33',
-      confirmButtonText: 'Yes, Completed! 🎓',
+      confirmButtonText: 'Yes, Completed! ✅',
       cancelButtonText: 'Not yet'
     }).then((result) => {
       if (result.isConfirmed) {
@@ -136,12 +149,16 @@ const OngoingTuitions = () => {
     }
   };
 
-  // --- 6. Conditional Rendering ---
+  // --- Conditional Rendering ---
+  if (!isUserValid) return <Unauthorized />; 
+
   if (isLoading) return <Loading />;
 
   if (isError) {
     const status = error.response?.status;
+    
     if (status === 401 || status === 403) return <Unauthorized />;
+    
     return <ServerDown />;
   }
 
@@ -156,7 +173,7 @@ const OngoingTuitions = () => {
             My Study <span className="text-orange-500 inline-block transform rotate-2">Zone</span>
           </h1>
           <p className="text-gray-500 text-lg md:text-xl max-w-2xl mx-auto">
-            Keep track of your learning journey & daily notes! 🌟
+            Keep track of your learning journey & daily notes! 📝
           </p>
           
           <div className="mt-8 inline-flex items-center bg-white px-6 py-3 rounded-full shadow-lg border-2 border-orange-100 transform hover:scale-105 transition-transform cursor-default">
@@ -177,7 +194,7 @@ const OngoingTuitions = () => {
               onClick={() => navigate('/all-tuitions')}
               className="bg-orange-500 text-white px-8 py-3 rounded-2xl font-bold text-lg hover:bg-orange-600 hover:shadow-lg hover:-translate-y-1 transition-all"
             >
-              Find a Tutor 🚀
+              Find a Tutor 💡
             </button>
           </div>
         ) : (
@@ -262,7 +279,7 @@ const OngoingTuitions = () => {
         )}
       </div>
 
-      {/* NOTE MODAL (Kept custom design as per original UI) */}
+      {/* NOTE MODAL */}
       {noteModal.isOpen && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-[2rem] shadow-2xl max-w-lg w-full p-8 transform scale-100">

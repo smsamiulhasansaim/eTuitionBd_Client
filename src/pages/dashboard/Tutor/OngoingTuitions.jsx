@@ -7,7 +7,7 @@ import Swal from 'sweetalert2';
 import { 
   Users, MapPin, Calendar, BookOpen, 
   MessageCircle, Edit3, Save, 
-  CheckCircle, DollarSign, X 
+  DollarSign, X 
 } from 'lucide-react';
 
 // --- Custom Components ---
@@ -27,15 +27,35 @@ export default function TutorOngoingTuitions() {
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [tutorNoteInput, setTutorNoteInput] = useState('');
 
-  // --- 1. User Authentication Check ---
-  const user = useMemo(() => {
+  // --- 1. User Authentication Check & Setup ---
+  const { user, authConfig, isUserValid } = useMemo(() => {
     const userStr = localStorage.getItem('user');
     if (!userStr) {
-      navigate('/login');
-      return null;
+      return { user: null, authConfig: {}, isUserValid: false };
     }
-    return JSON.parse(userStr);
-  }, [navigate]);
+
+    const userData = JSON.parse(userStr);
+    const authToken = userData.token || userData.jwtToken || localStorage.getItem('jwtToken'); 
+
+    const config = {
+      headers: {
+        Authorization: authToken ? `Bearer ${authToken}` : undefined,
+      },
+    };
+
+    return { 
+        user: userData, 
+        authConfig: config, 
+        isUserValid: !!userData._id && !!authToken
+    };
+  }, []);
+  
+  // Handle invalid user state
+  if (!isUserValid) {
+    navigate('/login');
+    return null;
+  }
+
 
   // --- 2. Data Fetching (TanStack Query) ---
   const { 
@@ -46,26 +66,23 @@ export default function TutorOngoingTuitions() {
   } = useQuery({
     queryKey: ['tutorStudents', user?._id],
     queryFn: async () => {
-      if (!user?._id) return [];
-      const response = await axios.get(`${API_URL}/api/ongoing-tuitions/tutor/students?tutorId=${user._id}`);
+      const response = await axios.get(`${API_URL}/api/ongoing-tuitions/tutor/students?tutorId=${user._id}`, authConfig);
       return response.data.data;
     },
-    enabled: !!user?._id, // Only run if user ID exists
+    enabled: isUserValid, 
+    retry: 1
   });
 
   // --- 3. Mutation: Save Tutor Note ---
   const saveNoteMutation = useMutation({
     mutationFn: async ({ id, note }) => {
-      await axios.patch(`${API_URL}/api/ongoing-tuitions/${id}/tutor-note`, { note });
+      await axios.patch(`${API_URL}/api/ongoing-tuitions/${id}/tutor-note`, { note }, authConfig);
     },
     onSuccess: () => {
-      // Refresh the list to show updated note
       queryClient.invalidateQueries(['tutorStudents']);
       
-      // Close modal
       setShowNoteModal(false);
       
-      // Show Toast
       Swal.fire({
         icon: 'success',
         title: 'Feedback Saved',
@@ -77,7 +94,6 @@ export default function TutorOngoingTuitions() {
       });
     },
     onError: (err) => {
-      console.error(err);
       Swal.fire('Error', 'Failed to save note. Please try again.', 'error');
     }
   });
