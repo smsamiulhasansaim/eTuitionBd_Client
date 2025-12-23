@@ -6,7 +6,7 @@ const HeroSection = () => {
   // Simulation of User State 
   const isLoggedIn = true; 
 
-  // Framer Motion Variants for Staggered Animation
+  // Framer Motion Variants
   const containerVariants = {
     hidden: { opacity: 0 },
     visible: {
